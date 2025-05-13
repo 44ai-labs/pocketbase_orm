@@ -274,6 +274,11 @@ class PBModel(BaseModel):
             }
             if hasattr(field, "options") and field.options:
                 field_dict["options"] = field.options
+            # make sure we sync references correct
+            field_name = field.name
+            for new_field in new_fields:
+                if new_field["name"] == field_name:
+                    field_dict.update(new_field)
             final_fields.append(field_dict)
 
         # Add new fields that don't exist yet
