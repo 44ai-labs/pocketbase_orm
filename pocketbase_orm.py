@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, TypeVar, Union
+from typing import Any, Dict, TypeVar, Union, Generic
 
 import httpx
 from pocketbase import PocketBase
@@ -13,6 +13,15 @@ __version__ = "0.17.2"
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound="PBModel")
+
+
+class PBReference(Generic[T]):
+    """
+    A generic type hint to signify a reference to another model type T.
+    This class itself doesn't need to be a Pydantic model if it's purely for type hinting.
+    """
+
+    pass
 
 
 def _pluralize(singular: str) -> str:
@@ -368,8 +377,8 @@ class PBModel(BaseModel):
                 logger.debug(f"Configuring relation field {name}")
                 # Find the related model in Union types
                 related_model = None
-                if hasattr(field, "__origin__") and field.__origin__ is Union:
-                    logger.debug(f"Field {name} args: {field.__args__}")
+                if hasattr(field, "__origin__") and field.__origin__ is PBReference:
+                    print(f"Field {name} args: {field.__args__}")
                     for arg in field.__args__:
                         if hasattr(arg, "__origin__"):
                             continue
@@ -436,7 +445,14 @@ class PBModel(BaseModel):
         # Get all possible types to check
         types_to_check = []
         if hasattr(pydantic_field, "__origin__"):
-            if pydantic_field.__origin__ is Union:
+            if pydantic_field.__origin__ is PBReference:
+                # Handle PBReference types
+                if hasattr(pydantic_field, "__args__"):
+                    print("PBReference __args__", pydantic_field.__args__)
+                    types_to_check.extend(pydantic_field.__args__)
+                else:
+                    raise ValueError("PBReference must have __args__ defined.")
+            elif pydantic_field.__origin__ is Union:
                 types_to_check.extend(pydantic_field.__args__)
             elif pydantic_field.__origin__ is list:
                 return "json"
