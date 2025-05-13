@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, TypeVar, Union, Generic
+from typing import Any, Dict, TypeVar, Union, Generic, get_origin, get_args, Type
 
 import httpx
 from pocketbase import PocketBase
@@ -274,10 +274,14 @@ class PBModel(BaseModel):
         # Get the schema from the existing collection
         current_fields = {field.name: field for field in existing_collection.fields}
         new_fields = cls._generate_fields()
+        all_fields = {field["name"]: field for field in new_fields}
 
         # Preserve existing fields and add new ones
         final_fields = []
         for field in existing_collection.fields:
+            if field.name not in all_fields:
+                # the field will be removed
+                continue
             field_dict = {
                 "name": field.name,
                 "type": field.type,
@@ -301,6 +305,9 @@ class PBModel(BaseModel):
                 final_fields.append(new_field)
 
         try:
+            logger.debug(
+                f"UPDATING {existing_collection.id}, {existing_collection.name}, {final_fields}"
+            )
             cls._pb_client.collections.update(
                 existing_collection.id,
                 {
@@ -312,6 +319,14 @@ class PBModel(BaseModel):
         except Exception as e:
             logger.error(f"Error updating collection: {e}")
             raise
+
+    @staticmethod
+    def get_referenced_pbmodel_type(ref_type_hint: Any) -> Type["PBModel"] | None:
+        if get_origin(ref_type_hint) is PBReferenceType:
+            args = get_args(ref_type_hint)
+            if args and isinstance(args[0], type) and issubclass(args[0], PBModel):
+                return args[0]
+        return None
 
     @classmethod
     def _generate_fields(cls) -> list[Dict[str, Any]]:
@@ -382,15 +397,21 @@ class PBModel(BaseModel):
                 logger.debug(f"Configuring relation field {name}")
                 # Find the related model in Union types
                 related_model = None
-                if hasattr(field, "__origin__") and field.__origin__ is PBReferenceType:
+                print("Going to check field", field)
+                if hasattr(field, "__origin__") and field.__origin__ is Union:
                     print(f"Field {name} args: {field.__args__}")
                     for arg in field.__args__:
-                        if hasattr(arg, "__origin__"):
-                            continue
                         if arg is str:
                             continue
-                        related_model = arg
-                        logger.debug(f"Found related model for {name}: {related_model}")
+                        if cls._is_reference_type(arg):
+                            print(f"Found reference type for {name}: {arg}")
+                            releated_model = cls.get_referenced_pbmodel_type(arg)
+                            if releated_model:
+                                related_model = releated_model
+                                logger.debug(
+                                    f"Found related model for {name}: {related_model}"
+                                )
+                            break
                 if related_model:
                     try:
                         logger.debug(
@@ -438,9 +459,14 @@ class PBModel(BaseModel):
         return isinstance(field_type, type) and issubclass(field_type, Enum)
 
     @staticmethod
-    def _is_pbmodel_type(field_type: Any) -> bool:
+    def _is_reference_type(field_type: type) -> bool:
         """Check if a type is a PBModel subclass."""
-        return isinstance(field_type, type) and issubclass(field_type, PBModel)
+        origin = get_origin(field_type)
+        if origin is PBReferenceType:
+            return True
+        if field_type is PBReferenceType:
+            return True
+        return False
 
     @staticmethod
     def _get_field_type(pydantic_field: Any) -> str:
@@ -450,14 +476,8 @@ class PBModel(BaseModel):
         # Get all possible types to check
         types_to_check = []
         if hasattr(pydantic_field, "__origin__"):
-            if pydantic_field.__origin__ is PBReferenceType:
-                # Handle PBReference types
-                if hasattr(pydantic_field, "__args__"):
-                    print("PBReference __args__", pydantic_field.__args__)
-                    types_to_check.extend(pydantic_field.__args__)
-                else:
-                    raise ValueError("PBReference must have __args__ defined.")
-            elif pydantic_field.__origin__ is Union:
+            print("pydantic_field.__origin__", pydantic_field.__origin__)
+            if pydantic_field.__origin__ is Union:
                 types_to_check.extend(pydantic_field.__args__)
             elif pydantic_field.__origin__ is list:
                 return "json"
@@ -467,11 +487,12 @@ class PBModel(BaseModel):
             types_to_check.append(pydantic_field)
 
         # Check all types in priority order
+        print("types_to_check", types_to_check)
         for field_type in types_to_check:
             # Special types
             if PBModel._is_enum_type(field_type):
                 return "select"
-            if PBModel._is_pbmodel_type(field_type):
+            if PBModel._is_reference_type(field_type):
                 return "relation"
             if field_type == FileUpload:
                 return "file"
