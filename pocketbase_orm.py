@@ -262,7 +262,7 @@ class PBModel(BaseModel):
                 try:
                     error_details = e.response.json()
                     logger.error(f"Error details: {error_details}")
-                except:
+                except Exception as _:
                     pass
             raise
 
@@ -477,11 +477,11 @@ class PBModel(BaseModel):
                 return "file"
 
             # Basic types
-            if field_type == str:
+            if field_type is str:
                 return "text"
             if field_type in (int, float):
                 return "number"
-            if field_type == bool:
+            if field_type is bool:
                 return "bool"
             if field_type == EmailStr:
                 return "email"
