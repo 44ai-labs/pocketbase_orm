@@ -413,7 +413,7 @@ class PBModel(BaseModel):
                         logger.debug(f"Field definition for {name}: {field_def}")
                     except Exception as e:
                         logger.error(
-                            f"Error getting collection ID for {related_model.Meta.collection_name}: {e}",
+                            f"Error getting collection ID for {related_model.get_collection_name()}: {e}",
                             exc_info=True,
                         )
                         raise
