@@ -15,13 +15,18 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", bound="PBModel")
 
 
-class PBReference(Generic[T]):
+class PBReferenceType(Generic[T]):
     """
     A generic type hint to signify a reference to another model type T.
     This class itself doesn't need to be a Pydantic model if it's purely for type hinting.
     """
 
     pass
+
+
+PBReference = (
+    PBReferenceType[T] | str
+)  # has to be string to set it correctly when writing a relation id
 
 
 def _pluralize(singular: str) -> str:
@@ -377,7 +382,7 @@ class PBModel(BaseModel):
                 logger.debug(f"Configuring relation field {name}")
                 # Find the related model in Union types
                 related_model = None
-                if hasattr(field, "__origin__") and field.__origin__ is PBReference:
+                if hasattr(field, "__origin__") and field.__origin__ is PBReferenceType:
                     print(f"Field {name} args: {field.__args__}")
                     for arg in field.__args__:
                         if hasattr(arg, "__origin__"):
@@ -445,7 +450,7 @@ class PBModel(BaseModel):
         # Get all possible types to check
         types_to_check = []
         if hasattr(pydantic_field, "__origin__"):
-            if pydantic_field.__origin__ is PBReference:
+            if pydantic_field.__origin__ is PBReferenceType:
                 # Handle PBReference types
                 if hasattr(pydantic_field, "__args__"):
                     print("PBReference __args__", pydantic_field.__args__)
