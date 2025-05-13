@@ -18,7 +18,7 @@ uv install pocketbase-orm
 ## Quick Start
 
 ```python
-from pocketbase_orm import PBModel
+from pocketbase_orm import PBModel, PBReference
 from pydantic import EmailStr, AnyUrl, Field
 from datetime import datetime, timezone
 from pocketbase.client import FileUpload
@@ -35,7 +35,7 @@ class Example(PBModel):  # Collection name will be "examples" by default
     created_at: datetime
     options: list[str]
     email_field: EmailStr | None = None
-    related_model: RelatedModel | str = Field(..., description="Related model reference")
+    related_model: PBReference[RelatedModel]
     image: FileUpload | str = Field(..., description="Image file upload")
 
 # Initialize PocketBase client and bind it to the ORM
