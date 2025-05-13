@@ -42,10 +42,6 @@ jobs:
           just install-pocketbase
 
       - name: Run Tests
-        timeout-minutes: 10
-        env:
-          POCKETBASE_URL: ${{ secrets.POCKETBASE_URL }}
-          POCKETBASE_USERNAME: ${{ secrets.POCKETBASE_USERNAME }}
-          POCKETBASE_PASSWORD: ${{ secrets.POCKETBASE_PASSWORD }}
+        timeout-minutes: 5
         run: |
           uv run pytest -v tests/
