@@ -334,7 +334,6 @@ class PBModel(BaseModel):
         )
 
         for name, field in cls.__annotations__.items():
-
             if name in ["id", "created", "updated"]:  # Skip base model fields
                 continue
 
@@ -374,7 +373,7 @@ class PBModel(BaseModel):
                     for arg in field.__args__:
                         if hasattr(arg, "__origin__"):
                             continue
-                        if arg == str:
+                        if arg is str:
                             continue
                         related_model = arg
                         logger.debug(f"Found related model for {name}: {related_model}")
@@ -412,7 +411,6 @@ class PBModel(BaseModel):
                 else:
                     logger.error(f"No valid related model found for field {name}")
                     raise ValueError(f"Invalid relation configuration for field {name}")
-            
 
             fields.append(field_def)
             logger.debug(f"Added field definition: {field_def}")
