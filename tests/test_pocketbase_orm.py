@@ -51,9 +51,6 @@ def pb_client():
     password = os.getenv("POCKETBASE_PASSWORD", "mamaistdiebeste")
     url = os.getenv("POCKETBASE_URL", "http://127.0.0.1:4419")
 
-    if not all([username, password, url]):
-        raise ValueError("PocketBase credentials not set in environment")
-
     process = None
     # PocketBase standard health endpoint
     health_endpoint = "/api/health"
