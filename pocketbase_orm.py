@@ -397,9 +397,7 @@ class PBModel(BaseModel):
                 logger.debug(f"Configuring relation field {name}")
                 # Find the related model in Union types
                 related_model = None
-                print("Going to check field", field)
                 if hasattr(field, "__origin__") and field.__origin__ is Union:
-                    print(f"Field {name} args: {field.__args__}")
                     for arg in field.__args__:
                         if arg is str:
                             continue
@@ -476,7 +474,6 @@ class PBModel(BaseModel):
         # Get all possible types to check
         types_to_check = []
         if hasattr(pydantic_field, "__origin__"):
-            print("pydantic_field.__origin__", pydantic_field.__origin__)
             if pydantic_field.__origin__ is Union:
                 types_to_check.extend(pydantic_field.__args__)
             elif pydantic_field.__origin__ is list:
@@ -487,7 +484,6 @@ class PBModel(BaseModel):
             types_to_check.append(pydantic_field)
 
         # Check all types in priority order
-        print("types_to_check", types_to_check)
         for field_type in types_to_check:
             # Special types
             if PBModel._is_enum_type(field_type):
