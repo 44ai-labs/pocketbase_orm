@@ -126,10 +126,9 @@ class PBModel(BaseModel):
         """Delete a record from the collection by ID."""
         return await cls.get_collection().delete(id, *args, **kwargs)
 
-    @classmethod
-    async def delete(cls, id=None, *args, **kwargs):
+    async def delete(self, id=None, *args, **kwargs):
         """Delete this record instance from the collection."""
-        return await cls.get_collection().delete(id or cls.id, *args, **kwargs)
+        return await self.get_collection().delete(id or self.id, *args, **kwargs)
 
     @classmethod
     async def delete_collection(cls):
