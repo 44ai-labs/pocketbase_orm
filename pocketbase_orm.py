@@ -4,8 +4,9 @@ from enum import Enum
 from typing import Any, Dict, TypeVar, Union, Generic, get_origin, get_args, Type
 
 import httpx
-from pocketbase import PocketBase
-from pocketbase.client import FileUpload
+from pocketbase import PocketBase, FileUpload
+from pocketbase.services.record import RecordService
+from pocketbase.models.dtos import CollectionModel, Record
 from pydantic import AnyUrl, BaseModel, EmailStr, Field
 
 __version__ = "0.17.2"
@@ -73,7 +74,7 @@ class PBModel(BaseModel):
         cls._pb_client = client
 
     @classmethod
-    def init_client(
+    async def init_client(
         cls,
         url: str,
         admin_email: str | None = None,
@@ -95,7 +96,9 @@ class PBModel(BaseModel):
         """
         client = PocketBase(url)
         if admin_email and admin_password:
-            client.admins.auth_with_password(admin_email, admin_password)
+            await client.collection("_superusers").auth.with_password(
+                admin_email, admin_password
+            )
         cls.bind_client(client)
         return client
 
@@ -108,7 +111,7 @@ class PBModel(BaseModel):
         return cls._collection_name
 
     @classmethod
-    def get_collection(cls):
+    def get_collection(cls) -> RecordService:
         """
         Returns the collection instance for the model.
         """
@@ -119,16 +122,16 @@ class PBModel(BaseModel):
         return cls._pb_client.collection(cls.get_collection_name())
 
     @classmethod
-    def delete_by_id(cls, id: str, *args, **kwargs):
+    async def delete_by_id(cls, id: str, *args, **kwargs):
         """Delete a record from the collection by ID."""
-        return cls.get_collection().delete(id, *args, **kwargs)
+        return await cls.get_collection().delete(id, *args, **kwargs)
 
-    def delete(self, id=None, *args, **kwargs):
+    async def delete(self, id=None, *args, **kwargs):
         """Delete this record instance from the collection."""
-        return self.get_collection().delete(id or self.id, *args, **kwargs)
+        return await self.get_collection().delete(id or self.id, *args, **kwargs)
 
     @classmethod
-    def delete_collection(cls):
+    async def delete_collection(cls):
         """
         Delete the entire collection from PocketBase.
 
@@ -144,9 +147,9 @@ class PBModel(BaseModel):
         collection_name = cls.get_collection_name()
         try:
             # Get collection ID first
-            collection = cls._pb_client.collections.get_one(collection_name)
+            collection = await cls._pb_client.collections.get_one(collection_name)
             # Delete the collection
-            cls._pb_client.collections.delete(collection.id)
+            await cls._pb_client.collections.delete(collection["id"])
             logger.debug(f"Collection {collection_name} deleted successfully.")
         except Exception as e:
             if "404" in str(e):
@@ -156,7 +159,7 @@ class PBModel(BaseModel):
                 raise
 
     @classmethod
-    def _process_record_data(cls, record_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _process_record_data(cls, record_data: Record) -> Dict[str, Any]:
         """
         Process record data before model validation.
         Handles special cases like file fields.
@@ -182,65 +185,67 @@ class PBModel(BaseModel):
         return processed_data
 
     @classmethod
-    def get_one(cls, id: str, **kwargs) -> T:
+    async def get_one(cls, id: str, **kwargs) -> T:
         """Get a single record from the collection and convert to model instance."""
-        record = cls.get_collection().get_one(id, kwargs)
-        processed_data = cls._process_record_data(record.__dict__)
+        record = await cls.get_collection().get_one(id, kwargs)
+        processed_data = cls._process_record_data(record)
         return cls.model_validate(processed_data)
 
     @classmethod
-    def get_list(cls, page: int = 1, per_page: int = 10, **kwargs) -> list[T]:
+    async def get_list(cls, page: int = 1, per_page: int = 10, **kwargs) -> list[T]:
         """Get a list of records from the collection and convert to model instances."""
-        result = cls.get_collection().get_list(page, per_page, kwargs)
+        results = await cls.get_collection().get_list(page, per_page, kwargs)
+        print("List Results:", results)
         items = [
-            cls.model_validate(cls._process_record_data(record.__dict__))
-            for record in result.items
+            cls.model_validate(cls._process_record_data(record))
+            for record in results["items"]
         ]
         return items
 
     @classmethod
-    def get_full_list(cls, **kwargs) -> list[T]:
+    async def get_full_list(cls, **kwargs) -> list[T]:
         """Get a full list of records and convert to model instances."""
-        records = cls.get_collection().get_full_list(**kwargs)
+        records = await cls.get_collection().get_full_list(**kwargs)
         return [
-            cls.model_validate(cls._process_record_data(record.__dict__))
-            for record in records
+            cls.model_validate(cls._process_record_data(record)) for record in records
         ]
 
     @classmethod
-    def get_first_list_item(cls, query, **kwargs) -> T:
+    async def get_first_list_item(cls, **kwargs) -> T:
         """Get the first matching record and convert to model instance."""
-        record = cls.get_collection().get_first_list_item(query, kwargs)
-        processed_data = cls._process_record_data(record.__dict__)
+        record = await cls.get_collection().get_first(kwargs)
+        processed_data = cls._process_record_data(record)
         return cls.model_validate(processed_data)
 
     @classmethod
-    def sync_collection(cls):
+    async def sync_collection(cls):
         """
         Sync the collection schema with PocketBase. Will create or update the collection.
         """
         collection_name = cls.get_collection_name()
 
         try:
-            existing_collection = cls._pb_client.collections.get_one(collection_name)
+            existing_collection = await cls._pb_client.collections.get_one(
+                collection_name
+            )
             logger.debug(f"Collection {collection_name} exists. Updating schema...")
-            cls._update_collection(existing_collection)
+            await cls._update_collection(existing_collection)
         except Exception as e:
             if "404" in str(e):  # Only create if collection doesn't exist
                 logger.debug(
                     f"Collection {collection_name} does not exist. Creating collection..."
                 )
-                cls._create_collection()
+                await cls._create_collection()
             else:
                 logger.error(f"Error syncing collection: {e}")
                 raise
 
     @classmethod
-    def _create_collection(cls):
+    async def _create_collection(cls):
         """
         Create the collection schema in PocketBase.
         """
-        fields = cls._generate_fields()
+        fields = await cls._generate_fields()
         collection_name = cls.get_collection_name()
 
         collection_payload = {
@@ -252,7 +257,7 @@ class PBModel(BaseModel):
         logger.debug(f"Creating collection with payload: {collection_payload}")
 
         try:
-            response = cls._pb_client.collections.create(collection_payload)
+            response = await cls._pb_client.collections.create(collection_payload)
             logger.debug(f"Collection {collection_name} created successfully.")
             return response
         except Exception as e:
@@ -267,33 +272,37 @@ class PBModel(BaseModel):
             raise
 
     @classmethod
-    def _update_collection(cls, existing_collection):
+    async def _update_collection(cls, existing_collection: CollectionModel):
         """
         Update the collection schema in PocketBase.
         """
         # Get the schema from the existing collection
-        current_fields = {field.name: field for field in existing_collection.fields}
-        new_fields = cls._generate_fields()
+        current_fields = {
+            field["name"]: field for field in existing_collection["fields"]
+        }
+        new_fields = await cls._generate_fields()
         all_fields = {field["name"]: field for field in new_fields}
 
         # Preserve existing fields and add new ones
         final_fields = []
-        for field in existing_collection.fields:
-            if field.name not in all_fields:
+        for field in existing_collection["fields"]:
+            if field["name"] not in all_fields:
                 # the field will be removed
                 continue
+            logger.debug(f"Processing field {field['name']}")
+            # https://github.com/44ai-labs/pocketbase/blob/01be3cc23726335b1cf28f5f4f30ffa30feb256c/pocketbase/models/utils/collection_field.py
             field_dict = {
-                "name": field.name,
-                "type": field.type,
-                "required": field.required,
-                "system": field.system,
-                "onCreate": field.onCreate,
-                "onUpdate": field.onUpdate,
+                "name": field["name"],
+                "type": field["type"],
+                "required": field["required"] if "required" in field else False,
+                "system": field["system"],
+                "onCreate": field["onCreate"] if "onCreate" in field else False,
+                "onUpdate": field["onUpdate"] if "onUpdate" in field else False,
             }
-            if hasattr(field, "options") and field.options:
-                field_dict["options"] = field.options
+            if hasattr(field, "options") and field["options"]:
+                field_dict["options"] = field["options"]
             # make sure we sync references correct
-            field_name = field.name
+            field_name = field["name"]
             for new_field in new_fields:
                 if new_field["name"] == field_name:
                     field_dict.update(new_field)
@@ -306,16 +315,18 @@ class PBModel(BaseModel):
 
         try:
             logger.debug(
-                f"UPDATING {existing_collection.id}, {existing_collection.name}, {final_fields}"
+                f"UPDATING {existing_collection['id']}, {existing_collection['name']}, {final_fields}"
             )
-            cls._pb_client.collections.update(
-                existing_collection.id,
+            await cls._pb_client.collections.update(
+                existing_collection["id"],
                 {
-                    "name": existing_collection.name,
+                    "name": existing_collection["name"],
                     "fields": final_fields,
                 },
             )
-            logger.debug(f"Collection {existing_collection.name} updated successfully.")
+            logger.debug(
+                f"Collection {existing_collection['name']} updated successfully."
+            )
         except Exception as e:
             logger.error(f"Error updating collection: {e}")
             raise
@@ -329,7 +340,7 @@ class PBModel(BaseModel):
         return None
 
     @classmethod
-    def _generate_fields(cls) -> list[Dict[str, Any]]:
+    async def _generate_fields(cls) -> list[Dict[str, Any]]:
         """
         Generate the field definitions for the collection based on the Pydantic model.
         """
@@ -415,10 +426,10 @@ class PBModel(BaseModel):
                         logger.debug(
                             f"Looking up collection for {related_model.get_collection_name()}"
                         )
-                        collection = cls._pb_client.collections.get_one(
+                        collection = await cls._pb_client.collections.get_one(
                             related_model.get_collection_name()
                         )
-                        logger.debug(f"Found collection for {name}: {collection.id}")
+                        logger.debug(f"Found collection for {name}: {collection['id']}")
 
                         field_def.update(
                             {
@@ -430,7 +441,9 @@ class PBModel(BaseModel):
                                 "cascadeDelete": False,
                                 "minSelect": 0,
                                 "maxSelect": 1,
-                                "collectionId": collection.id,  # This must be present and non-empty
+                                "collectionId": collection[
+                                    "id"
+                                ],  # This must be present and non-empty
                             }
                         )
 
@@ -512,12 +525,11 @@ class PBModel(BaseModel):
         # Default to json for complex types
         return "json"
 
-    def save(self) -> T:
+    async def save(self) -> T:
         """
         Save the model instance to PocketBase.
         """
-        client = self.get_collection().client
-        collection_name = self.get_collection_name()
+        collection = self.get_collection()
 
         # Prepare data for saving - handle file uploads specially
         data = {}
@@ -543,20 +555,21 @@ class PBModel(BaseModel):
                     data[field_name] = field_value
 
         if hasattr(self, "id") and self.id:
-            result = client.collection(collection_name).update(self.id, data)
+            result = await collection.update(self.id, data)
             logger.debug(f"Updated record with ID: {self.id}")
         else:
-            result = client.collection(collection_name).create(data)
-            self.id = result.id
+            result = await collection.create(data)
+            self.id = result["id"]
             logger.debug(f"Created new record with ID: {self.id}")
 
+        print("Record, result:", result)
         # Update instance with response data from PocketBase
-        self.created = result.created
-        self.updated = result.updated
+        self.created = result.get("created", self.created)
+        self.updated = result.get("updated", self.updated)
 
         return self
 
-    def get_file_contents(self, field: str) -> bytes:
+    async def get_file_contents(self, field: str) -> bytes:
         """
         Get the contents of a file field using httpx.
 
@@ -585,14 +598,15 @@ class PBModel(BaseModel):
             return file_obj.read()
 
         # Otherwise, treat it as a filename and fetch from PocketBase
-        collection = self.get_collection()
-        client = collection.client
+        client = self._pb_client
+        if not client:
+            raise RuntimeError(
+                "PocketBase client not bound. Call PBModel.bind_client() first."
+            )
         collection_name = self.get_collection_name()
 
         # Construct the PocketBase file URL
-        file_url = (
-            f"{client.base_url}/api/files/{collection_name}/{self.id}/{field_value}"
-        )
+        file_url = f"{client._inners.client.base_url}/api/files/{collection_name}/{self.id}/{field_value}"
 
         try:
             response = httpx.get(file_url)
