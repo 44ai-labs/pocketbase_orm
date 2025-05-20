@@ -265,7 +265,7 @@ class PBModel(BaseModel):
             # Try to get more details about the error
             if hasattr(e, "response") and hasattr(e.response, "json"):
                 try:
-                    error_details = e.response.json()
+                    error_details = e.response.json()  # type: ignore
                     logger.error(f"Error details: {error_details}")
                 except Exception as _:
                     pass
