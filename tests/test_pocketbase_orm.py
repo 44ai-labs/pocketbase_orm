@@ -4,7 +4,8 @@ from typing import Union
 import uuid
 
 import pytest
-from pocketbase.client import FileUpload
+import pytest_asyncio
+from pocketbase import FileUpload
 from pydantic import AnyUrl, EmailStr, Field
 
 from pocketbase_orm import PBModel, User, PBReference
@@ -39,28 +40,29 @@ class ModelWithEnum(PBModel, collection="enum_models"):
     user_type: UserType  # Using the actual enum type
 
 
-@pytest.fixture(scope="session")
-def setup_models(pb_client):
+@pytest_asyncio.fixture(scope="function")
+async def setup_models(pb_client):
     """Fixture to bind the client and sync collections."""
     PBModel.bind_client(pb_client)
-    RelatedModel.sync_collection()
-    Example.sync_collection()
-    ModelWithEnum.sync_collection()
+    await RelatedModel.sync_collection()
+    await Example.sync_collection()
+    await ModelWithEnum.sync_collection()
     yield
-    ModelWithEnum.delete_collection()
-    Example.delete_collection()
-    RelatedModel.delete_collection()
+    await ModelWithEnum.delete_collection()
+    await Example.delete_collection()
+    await RelatedModel.delete_collection()
 
 
-@pytest.fixture(scope="session")
-def related_model(setup_models):
+@pytest_asyncio.fixture(scope="function")
+async def related_model(setup_models):
     """Fixture to create and return a test RelatedModel instance."""
     model = RelatedModel(name="Test Related Model")
-    model.save()
+    await model.save()
     yield model
 
 
-def test_create_example_with_file(setup_models, related_model):
+@pytest.mark.asyncio
+async def test_create_example_with_file(setup_models, related_model):
     """Test creating an Example record with a file upload."""
     with open("static/image.png", "rb") as f:
         example = Example(
@@ -74,52 +76,55 @@ def test_create_example_with_file(setup_models, related_model):
             related_model=related_model.id,
             image=FileUpload(("image.png", f)),
         )
-        example.save()
+        await example.save()
 
         # Verify the record was created
         assert example.id != ""
 
         # Test retrieval methods
-        retrieved = Example.get_one(example.id)
+        retrieved: Example = await Example.get_one(example.id)
         assert retrieved.text_field == "Test with image"
         assert retrieved.number_field == 123
         assert retrieved.is_active is True
 
         # Test list retrieval
-        examples = Example.get_full_list()
+        examples = await Example.get_full_list()
         assert len(examples) > 0
         assert any(e.id == example.id for e in examples)
 
         # Test filtering
-        filtered = Example.get_first_list_item(f"email_field = '{example.email_field}'")
+        filtered = await Example.get_first_list_item(
+            filter=f"email_field = '{example.email_field}'"
+        )
         assert filtered.id
 
         # Test file contents
-        image_bytes = example.get_file_contents("image")
+        image_bytes = await example.get_file_contents("image")
         assert len(image_bytes) > 0
 
 
-def test_related_model_crud(setup_models):
+@pytest.mark.asyncio
+async def test_related_model_crud(setup_models):
     """Test CRUD operations for RelatedModel."""
     # Create
     model = RelatedModel(name="CRUD Test Model")
-    model.save()
+    await model.save()
     assert model.id != ""
 
     # Read
-    retrieved = RelatedModel.get_one(model.id)
+    retrieved = await RelatedModel.get_one(model.id)
     assert retrieved.name == "CRUD Test Model"
 
     # Update
     model.name = "Updated Name"
-    model.save()
-    updated = RelatedModel.get_one(model.id)
+    await model.save()
+    updated = await RelatedModel.get_one(model.id)
     assert updated.name == "Updated Name"
 
     # Delete
-    RelatedModel.delete_by_id(model.id)
+    await RelatedModel.delete_by_id(model.id)
     with pytest.raises(Exception):
-        RelatedModel.get_one(model.id)
+        await RelatedModel.get_one(model.id)
 
 
 def test_example_validation(setup_models, related_model):
@@ -151,7 +156,8 @@ def test_example_validation(setup_models, related_model):
         )
 
 
-def test_get_list_pagination(setup_models, related_model):
+@pytest.mark.asyncio
+async def test_get_list_pagination(setup_models, related_model):
     """Test pagination functionality of get_list method."""
     # Create multiple example records
     examples = []
@@ -166,15 +172,16 @@ def test_get_list_pagination(setup_models, related_model):
             options=["option1"],
             related_model=related_model.id,
         )
-        example.save()
+        await example.save()
         examples.append(example)
 
     # Test first page (5 items)
-    page1 = Example.get_list(page=1, per_page=5)
+    page1 = await Example.get_list(page=1, per_page=5)
+    print("Page 1 items:", page1)
     assert len(page1) == 5
 
     # Test second page (5 items)
-    page2 = Example.get_list(page=2, per_page=5)
+    page2 = await Example.get_list(page=2, per_page=5)
     assert len(page2) == 5
 
     # Verify different records on different pages
@@ -183,12 +190,13 @@ def test_get_list_pagination(setup_models, related_model):
     assert not page1_ids.intersection(page2_ids)  # No overlap between pages
 
     # Test with filter
-    filtered = Example.get_list(page=1, per_page=3, filter="number_field >= 10")
+    filtered = await Example.get_list(page=1, per_page=3, filter="number_field >= 10")
     assert len(filtered) == 3
     assert all(item.number_field >= 10 for item in filtered)
 
 
-def test_user_collection_operations(setup_models):
+@pytest.mark.asyncio
+async def test_user_collection_operations(setup_models):
     """Test that User model prevents collection creation/modification."""
 
     # Test that attempting to create users collection raises error
@@ -213,10 +221,11 @@ def test_user_collection_operations(setup_models):
     assert user.name == "Test User"
 
 
-def test_user_crud_operations(setup_models):
+@pytest.mark.asyncio
+async def test_user_crud_operations(setup_models):
     """Test CRUD operations for User model."""
 
-    test_users = []
+    test_users: list[User] = []
 
     email = f"test.user{uuid.uuid4()}@example.com"
 
@@ -228,12 +237,12 @@ def test_user_crud_operations(setup_models):
         name="Test User",
         emailVisibility=True,
     )
-    user.save()
+    await user.save()
     assert user.id, "User should have an ID after saving"
     test_users.append(user)
 
     # Test get_one
-    retrieved = User.get_one(user.id)
+    retrieved: User = await User.get_one(user.id)
     assert retrieved.email == email
     assert retrieved.name == "Test User"
     assert retrieved.password is None  # Password should not be returned
@@ -241,7 +250,7 @@ def test_user_crud_operations(setup_models):
     # Create more test users for list operations
     for i in range(1, 4):
         email = f"test.user{i}{uuid.uuid4()}@example.com"
-        user = User(
+        user = await User(
             email=email,
             password="securepassword123",
             passwordConfirm="securepassword123",
@@ -250,30 +259,30 @@ def test_user_crud_operations(setup_models):
         test_users.append(user)
 
     # Test get_list with pagination
-    users_page = User.get_list(page=1, per_page=2)
+    users_page = await User.get_list(page=1, per_page=2)
     assert len(users_page) == 2, "Should return 2 users per page"
 
     # Test get_full_list
-    all_users = User.get_full_list()
+    all_users = await User.get_full_list()
     assert len(all_users) >= len(test_users), "Should return all test users"
 
-    # Test get_first_list_item with filter
-    first_user = User.get_first_list_item(f'email = "{email}"')
+    first_user = await User.get_first_list_item(filter=f'email = "{email}"')
     assert first_user.email == email
 
     # Test updating a user
     user = test_users[0]
     user.name = "Updated Name"
-    user.save()
+    await user.save()
 
-    updated = User.get_one(user.id)
+    updated: User = await User.get_one(user.id)
     assert updated.name == "Updated Name"
 
     for user in test_users:
-        user.delete()
+        await user.delete()
 
 
-def test_sync_collection_add_fields(pb_client):
+@pytest.mark.asyncio
+async def test_sync_collection_add_fields(pb_client):
     """Test that sync_collection can add new fields to an existing collection."""
 
     collection_name = "test_sync_model"
@@ -289,16 +298,16 @@ def test_sync_collection_add_fields(pb_client):
     try:
         # Clean up any existing collection from previous test runs
         try:
-            InitialModel.delete_collection()
+            await InitialModel.delete_collection()
         except Exception as _:
             pass
 
         # 1. Create the collection with initial fields
-        InitialModel.sync_collection()
+        await InitialModel.sync_collection()
 
         # Verify the collection exists with expected fields
-        collection = pb_client.collections.get_one(collection_name)
-        field_names = [field.name for field in collection.fields]
+        collection = await pb_client.collections.get_one(collection_name)
+        field_names = [field["name"] for field in collection["fields"]]
 
         # Should have name, count, created, and updated fields
         assert "name" in field_names
@@ -317,11 +326,11 @@ def test_sync_collection_add_fields(pb_client):
 
         # Bind client and sync extended model to update the collection
         ExtendedModel.bind_client(pb_client)
-        ExtendedModel.sync_collection()
+        await ExtendedModel.sync_collection()
 
         # Verify the collection now has the new fields
-        updated_collection = pb_client.collections.get_one(collection_name)
-        updated_field_names = [field.name for field in updated_collection.fields]
+        updated_collection = await pb_client.collections.get_one(collection_name)
+        updated_field_names = [field["name"] for field in updated_collection["fields"]]
 
         # Should now have all fields including the new ones
         assert "name" in updated_field_names
@@ -334,26 +343,27 @@ def test_sync_collection_add_fields(pb_client):
     finally:
         # Clean up
         try:
-            InitialModel.delete_collection()
+            await InitialModel.delete_collection()
         except Exception as _:
             pass
 
 
-def test_enum_field_handling(setup_models):
+@pytest.mark.asyncio
+async def test_enum_field_handling(setup_models):
     """Test handling of enum fields in the model."""
     # Create an instance with an enum value
     instance = ModelWithEnum(name="Enum Test", user_type=UserType.ADMIN)
-    instance.save()
+    await instance.save()
 
     # Retrieve the instance and check that it's converted to the proper enum type
-    retrieved = ModelWithEnum.get_one(instance.id)
+    retrieved = await ModelWithEnum.get_one(instance.id)
     assert retrieved.user_type == UserType.ADMIN
     assert isinstance(retrieved.user_type, UserType)  # Verify it's the actual enum type
 
     # Test with another enum value
     instance2 = ModelWithEnum(name="Enum Test 2", user_type=UserType.GUEST)
-    instance2.save()
+    await instance2.save()
 
-    retrieved2 = ModelWithEnum.get_one(instance2.id)
+    retrieved2 = await ModelWithEnum.get_one(instance2.id)
     assert retrieved2.user_type == UserType.GUEST
     assert isinstance(retrieved2.user_type, UserType)

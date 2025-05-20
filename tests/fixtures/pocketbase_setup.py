@@ -3,12 +3,13 @@ import subprocess
 import time
 import httpx
 import signal
+import pytest_asyncio
 import pytest
 from pocketbase_orm import PBModel
 
 
-@pytest.fixture(scope="session")
-def pb_client():
+@pytest_asyncio.fixture(scope="function")
+async def pb_client():
     """Fixture to provide an authenticated PocketBase client."""
     username = os.getenv("POCKETBASE_USERNAME", "admin@pb.com")
     password = os.getenv("POCKETBASE_PASSWORD", "mamaistdiebeste")
@@ -84,7 +85,7 @@ def pb_client():
             pytest.fail("PocketBase health check definitively failed.")
 
         print("PocketBase is healthy. Initializing client...")
-        client = PBModel.init_client(url, username, password)
+        client = await PBModel.init_client(url, username, password)
         yield client
 
     finally:
