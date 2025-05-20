@@ -624,7 +624,7 @@ class User(PBModel, collection="users"):
     passwordConfirm: str | None = None  # Required when creating/updating password
     emailVisibility: bool = False
     verified: bool = False
-    name: str | None = None
+    name: str | None = Field(default=None, min_length=0)
     avatar: Union[FileUpload, str, None] = None
 
     @classmethod
