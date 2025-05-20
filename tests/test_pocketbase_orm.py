@@ -70,7 +70,7 @@ async def test_create_example_with_file(setup_models, related_model):
             number_field=123,
             is_active=True,
             email_field="test@example.com",
-            url_field="http://example.com",
+            url_field="http://example.com",  # type: ignore
             created_at=datetime.now(timezone.utc),
             options=["option1", "option2"],
             related_model=related_model.id,
@@ -79,10 +79,11 @@ async def test_create_example_with_file(setup_models, related_model):
         await example.save()
 
         # Verify the record was created
-        assert example.id != ""
+        example_id = example.id
+        assert example_id and example_id != ""
 
         # Test retrieval methods
-        retrieved: Example = await Example.get_one(example.id)
+        retrieved: Example = await Example.get_one(example_id)
         assert retrieved.text_field == "Test with image"
         assert retrieved.number_field == 123
         assert retrieved.is_active is True
@@ -112,19 +113,19 @@ async def test_related_model_crud(setup_models):
     assert model.id != ""
 
     # Read
-    retrieved = await RelatedModel.get_one(model.id)
+    retrieved = await RelatedModel.get_one(model.id)  # type: ignore
     assert retrieved.name == "CRUD Test Model"
 
     # Update
     model.name = "Updated Name"
     await model.save()
-    updated = await RelatedModel.get_one(model.id)
+    updated = await RelatedModel.get_one(model.id)  # type: ignore
     assert updated.name == "Updated Name"
 
     # Delete
-    await RelatedModel.delete_by_id(model.id)
+    await RelatedModel.delete_by_id(model.id)  # type: ignore
     with pytest.raises(Exception):
-        await RelatedModel.get_one(model.id)
+        await RelatedModel.get_one(model.id)  # type: ignore
 
 
 def test_example_validation(setup_models, related_model):
@@ -135,8 +136,8 @@ def test_example_validation(setup_models, related_model):
             text_field="Test",
             number_field=123,
             is_active=True,
-            email_field="invalid-email",  # Invalid email format
-            url_field="http://example.com",
+            email_field="invalid-email",  # type: ignore
+            url_field="http://example.com",  # type: ignore
             created_at=datetime.now(timezone.utc),
             options=["option1"],
             related_model=related_model.id,
@@ -149,7 +150,7 @@ def test_example_validation(setup_models, related_model):
             number_field=123,
             is_active=True,
             email_field="test@example.com",
-            url_field="invalid-url",  # Invalid URL format
+            url_field="invalid-url",  # type: ignore
             created_at=datetime.now(timezone.utc),
             options=["option1"],
             related_model=related_model.id,
@@ -167,7 +168,7 @@ async def test_get_list_pagination(setup_models, related_model):
             number_field=i,
             is_active=True,
             email_field=f"test{i}@example.com",
-            url_field="http://example.com",
+            url_field="http://example.com",  # type: ignore
             created_at=datetime.now(timezone.utc),
             options=["option1"],
             related_model=related_model.id,
@@ -242,7 +243,7 @@ async def test_user_crud_operations(setup_models):
     test_users.append(user)
 
     # Test get_one
-    retrieved: User = await User.get_one(user.id)
+    retrieved: User = await User.get_one(user.id)  # type: ignore
     assert retrieved.email == email
     assert retrieved.name == "Test User"
     assert retrieved.password is None  # Password should not be returned
@@ -356,7 +357,9 @@ async def test_enum_field_handling(setup_models):
     await instance.save()
 
     # Retrieve the instance and check that it's converted to the proper enum type
-    retrieved = await ModelWithEnum.get_one(instance.id)
+    instance_id = instance.id
+    assert instance_id and instance_id != ""
+    retrieved = await ModelWithEnum.get_one(instance_id)
     assert retrieved.user_type == UserType.ADMIN
     assert isinstance(retrieved.user_type, UserType)  # Verify it's the actual enum type
 
@@ -364,6 +367,8 @@ async def test_enum_field_handling(setup_models):
     instance2 = ModelWithEnum(name="Enum Test 2", user_type=UserType.GUEST)
     await instance2.save()
 
-    retrieved2 = await ModelWithEnum.get_one(instance2.id)
+    instance2_id = instance2.id
+    assert instance2_id and instance2_id != ""
+    retrieved2 = await ModelWithEnum.get_one(instance2_id)
     assert retrieved2.user_type == UserType.GUEST
     assert isinstance(retrieved2.user_type, UserType)

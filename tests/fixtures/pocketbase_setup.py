@@ -35,7 +35,7 @@ async def pb_client():
         time.sleep(1.0)
         if process.poll() is not None:
             stdout_output, stderr_output = process.communicate()
-            pytest.fail(f"STDOUT:\n{stdout_output}\nSTDERR:\n{stderr_output}")
+            pytest.fail(f"STDOUT:\n{stdout_output}\nSTDERR:\n{stderr_output}")  # type: ignore
         print(f"PocketBase process started (PID: {process.pid}).")
 
         # --- Health Check using httpx ---
@@ -76,13 +76,13 @@ async def pb_client():
                 if attempt < max_retries - 1:
                     time.sleep(retry_delay_seconds)
                 else:
-                    pytest.fail(
+                    pytest.fail(  # type: ignore
                         f"PocketBase did not become healthy at {health_check_full_url} "
                         f"after {max_retries} attempts ({int(max_retries * retry_delay_seconds)} seconds).\n"
                     )
 
         if not healthy:
-            pytest.fail("PocketBase health check definitively failed.")
+            pytest.fail("PocketBase health check definitively failed.")  # type: ignore
 
         print("PocketBase is healthy. Initializing client...")
         client = await PBModel.init_client(url, username, password)
