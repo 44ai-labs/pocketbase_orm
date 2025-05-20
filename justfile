@@ -7,6 +7,7 @@ clear:
 publish: test clear build
     uv publish
 
+# --log-cli-level=DEBUG 
 test:
     uv run pytest -xvs tests/
 
@@ -15,6 +16,9 @@ format:
 
 ruff-ci:
     uvx ruff check . && uvx ruff format --check .
+
+typing:
+    uvx ty check
 
 # sudo apt install curl unzip
 install-pocketbase:
