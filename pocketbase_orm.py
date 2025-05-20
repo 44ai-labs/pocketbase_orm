@@ -1,7 +1,9 @@
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, TypeVar, Union, Generic, get_origin, get_args, Type
+from typing import Any, Dict, TypeVar, Generic, get_origin, get_args, Type
+import typing
+import types
 
 import httpx
 from pocketbase import PocketBase, FileUpload
@@ -158,6 +160,17 @@ class PBModel(BaseModel):
                 logger.error(f"Error deleting collection {collection_name}: {e}")
                 raise
 
+    def is_union_type(field_type: Any) -> bool:
+        origin = typing.get_origin(field_type)
+        return origin is typing.Union or origin is types.UnionType
+
+    @classmethod
+    def is_file_upload_union(cls, field_type):
+        args = get_args(field_type)
+        return (
+            cls.is_union_type(field_type) and FileUpload in args
+        ) or field_type is FileUpload
+
     @classmethod
     def _process_record_data(cls, record_data: Record) -> Dict[str, Any]:
         """
@@ -172,11 +185,7 @@ class PBModel(BaseModel):
                 continue
 
             # Check if field is a file type (in a Union)
-            is_file_field = False
-            if hasattr(field_type, "__origin__") and field_type.__origin__ is Union:
-                is_file_field = FileUpload in field_type.__args__
-            else:
-                is_file_field = field_type is FileUpload
+            is_file_field = cls.is_file_upload_union(field_type)
 
             # Handle file fields - convert empty strings to None
             if is_file_field and processed_data[field_name] == "":
@@ -386,7 +395,7 @@ class PBModel(BaseModel):
 
             # Configure enum select field options if applicable
             let_enum = None
-            if hasattr(field, "__origin__") and field.__origin__ is Union:
+            if hasattr(field, "__origin__") and cls.is_union_type(field):
                 for arg in field.__args__:
                     if isinstance(arg, type) and issubclass(arg, Enum):
                         let_enum = arg
@@ -408,7 +417,7 @@ class PBModel(BaseModel):
                 logger.debug(f"Configuring relation field {name}")
                 # Find the related model in Union types
                 related_model = None
-                if hasattr(field, "__origin__") and field.__origin__ is Union:
+                if hasattr(field, "__origin__") and cls.is_union_type(field):
                     for arg in field.__args__:
                         if arg is str:
                             continue
@@ -479,15 +488,15 @@ class PBModel(BaseModel):
             return True
         return False
 
-    @staticmethod
-    def _get_field_type(pydantic_field: Any) -> str:
+    @classmethod
+    def _get_field_type(cls, pydantic_field: Any) -> str:
         """
         Convert the Pydantic field type into a PocketBase field type.
         """
         # Get all possible types to check
         types_to_check = []
         if hasattr(pydantic_field, "__origin__"):
-            if pydantic_field.__origin__ is Union:
+            if cls.is_union_type(pydantic_field):
                 types_to_check.extend(pydantic_field.__args__)
             elif pydantic_field.__origin__ is list:
                 return "json"
@@ -625,7 +634,7 @@ class User(PBModel, collection="users"):
     emailVisibility: bool = False
     verified: bool = False
     name: str | None = Field(default=None, min_length=0)
-    avatar: Union[FileUpload, str, None] = None
+    avatar: FileUpload | None = None
 
     @classmethod
     def _create_collection(cls):
