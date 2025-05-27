@@ -29,6 +29,15 @@ class Example(PBModel):
     )
 
 
+class NonTypeChecksModel(PBModel, collection="non_type_checks"):
+    name: str | None = None
+    age: int | None = None
+    is_active: bool | None = None
+    tags: list[str] | None = None
+    metadata: dict[str, str] | None = None
+    time_field: datetime | None = None
+
+
 class UserType(str, Enum):
     ADMIN = "admin"
     REGULAR = "regular"
@@ -47,10 +56,12 @@ async def setup_models(pb_client):
     await RelatedModel.sync_collection()
     await Example.sync_collection()
     await ModelWithEnum.sync_collection()
+    await NonTypeChecksModel.sync_collection()
     yield
     await ModelWithEnum.delete_collection()
     await Example.delete_collection()
     await RelatedModel.delete_collection()
+    await NonTypeChecksModel.delete_collection()
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -372,3 +383,22 @@ async def test_enum_field_handling(setup_models):
     retrieved2 = await ModelWithEnum.get_one(instance2_id)
     assert retrieved2.user_type == UserType.GUEST
     assert isinstance(retrieved2.user_type, UserType)
+
+
+@pytest.mark.asyncio
+async def test_non_type_checks_model(setup_models):
+    """Test model that allows non-type checks."""
+    model = NonTypeChecksModel()
+    await model.save()
+
+    # Verify the record was created
+    assert model.id and model.id != ""
+
+    # Retrieve and check fields
+    retrieved: NonTypeChecksModel = await NonTypeChecksModel.get_one(model.id)
+    assert retrieved.name is None
+    assert retrieved.age == 0
+    assert retrieved.is_active is False
+    assert retrieved.tags is None
+    assert retrieved.metadata is None
+    assert retrieved.time_field is None
