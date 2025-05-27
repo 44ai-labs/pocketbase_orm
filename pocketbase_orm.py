@@ -204,7 +204,6 @@ class PBModel(BaseModel):
     async def get_list(cls, page: int = 1, per_page: int = 10, **kwargs) -> list[T]:
         """Get a list of records from the collection and convert to model instances."""
         results = await cls.get_collection().get_list(page, per_page, kwargs)
-        print("List Results:", results)
         items = [
             cls.model_validate(cls._process_record_data(record))
             for record in results["items"]
