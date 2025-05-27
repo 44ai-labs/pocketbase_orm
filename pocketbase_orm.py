@@ -68,6 +68,18 @@ class PBModel(BaseModel):
         else:
             cls._collection_name = _pluralize(cls.__name__.lower())
 
+        for name, field in cls.model_fields.items():
+            ann = field.annotation
+            if cls.is_union_type(ann) and type(None) in get_args(ann):
+                # collect the non-None members of the Union
+                non_none = [t for t in get_args(ann) if t is not type(None)]
+                # if any of them is int or bool, reject
+                if any(t in (int, bool) for t in non_none):
+                    bad = " or ".join(t.__name__ for t in non_none if t in (int, bool))
+                    raise TypeError(
+                        f"Field '{name}' may not be Optional[{bad}] due to defaults of pocketbase (0 for int and False for bool)."
+                    )
+
     @classmethod
     def bind_client(cls, client: PocketBase):
         """
@@ -189,6 +201,10 @@ class PBModel(BaseModel):
 
             # Handle file fields - convert empty strings to None
             if is_file_field and processed_data[field_name] == "":
+                processed_data[field_name] = None
+
+            if field_type is not str and processed_data[field_name] == "":
+                # Convert empty strings to None for non-string fields
                 processed_data[field_name] = None
 
         return processed_data
