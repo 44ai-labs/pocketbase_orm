@@ -6,7 +6,7 @@ requires = ["flit_core >=3.2,<4"]
 dependencies = [
   # "pocketbase @ git+https://github.com/44ai-labs/pocketbase.git@update-collection-fields",
   # "pocketbase-async",
-  "pocketbase-async @ git+https://github.com/44ai-labs/pocketbase-async@add-batch-support",
+  "pocketbase-async @ git+https://github.com/44ai-labs/pocketbase-async@dev-44ai",
   "pydantic[email]>=2.10.6",
 ]
 description = "An ORM for PocketBase based on Pydantic"
