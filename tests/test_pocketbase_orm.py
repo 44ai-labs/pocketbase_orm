@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Union
 import uuid
 
 import pytest
@@ -8,7 +7,7 @@ import pytest_asyncio
 from pocketbase import FileUpload
 from pydantic import AnyUrl, EmailStr, Field
 
-from pocketbase_orm import PBModel, User, PBReference
+from pocketbase_orm import PBModel, User, PBReference, FileUploadORM
 
 
 class RelatedModel(PBModel, collection="related_models"):
@@ -24,9 +23,7 @@ class Example(PBModel):
     options: list[str]
     email_field: EmailStr | None = None
     related_model: PBReference[RelatedModel]
-    image: Union[FileUpload, str] | None = Field(
-        default=None, description="Image file upload"
-    )
+    image: FileUploadORM | None = Field(default=None, description="Image file upload")
 
 
 class NonTypeChecksModel(PBModel, collection="non_type_checks"):
@@ -36,6 +33,14 @@ class NonTypeChecksModel(PBModel, collection="non_type_checks"):
     tags: list[str] | None = None
     metadata: dict[str, str] | None = None
     time_field: datetime | None = None
+
+
+class JSONTypeandFile(PBModel, collection="json_type_checks"):
+    test_dict: dict | None = None
+    test_list: list | None = None
+    test_string_list: list[str] | None = None
+    test_file: FileUploadORM | None = None
+    test_file_2: FileUploadORM | None = None
 
 
 class UserType(str, Enum):
@@ -57,11 +62,13 @@ async def setup_models(pb_client):
     await Example.sync_collection()
     await ModelWithEnum.sync_collection()
     await NonTypeChecksModel.sync_collection()
+    await JSONTypeandFile.sync_collection()
     yield
     await ModelWithEnum.delete_collection()
     await Example.delete_collection()
     await RelatedModel.delete_collection()
     await NonTypeChecksModel.delete_collection()
+    await JSONTypeandFile.delete_collection()
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -395,10 +402,31 @@ async def test_non_type_checks_model(setup_models):
     assert model.id and model.id != ""
 
     # Retrieve and check fields
-    retrieved: NonTypeChecksModel = await NonTypeChecksModel.get_one(model.id)
+    retrieved: NonTypeChecksModel = await NonTypeChecksModel.get_one(model.id)  # type: ignore
     assert retrieved.name is None
     assert retrieved.age == 0
     assert retrieved.is_active is False
     assert retrieved.tags is None
     assert retrieved.metadata is None
     assert retrieved.time_field is None
+
+
+@pytest.mark.asyncio
+async def test_json_type_checks_model(setup_models):
+    """Test model with JSON type checks."""
+    model = JSONTypeandFile(
+        test_dict={"key1": "value1", "key2": "value2"},
+        test_list=["item1", "item2"],
+        test_string_list=["string1", "string2"],
+        test_file=FileUpload(("test_file.txt", b"Test file content")),
+    )
+    await model.save()
+
+    # Verify the record was created
+    assert model.id and model.id != ""
+
+    # Retrieve and check fields
+    retrieved: JSONTypeandFile = await JSONTypeandFile.get_one(model.id)  # type: ignore
+    assert retrieved.test_dict == {"key1": "value1", "key2": "value2"}
+    assert retrieved.test_list == ["item1", "item2"]
+    assert retrieved.test_string_list == ["string1", "string2"]
