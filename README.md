@@ -18,7 +18,7 @@ uv install pocketbase-orm
 ## Quick Start
 
 ```python
-from pocketbase_orm import PBModel, PBReference
+from pocketbase_orm import PBModel, PBReference, FileUploadORM
 from pydantic import EmailStr, AnyUrl, Field
 from datetime import datetime, timezone
 from pocketbase import FileUpload
@@ -36,7 +36,7 @@ class Example(PBModel):  # Collection name will be "examples" by default
     options: list[str]
     email_field: EmailStr | None = None
     related_model: PBReference[RelatedModel]
-    image: FileUpload | str = Field(..., description="Image file upload")
+    image: FileUploadORM 
 
 # Initialize PocketBase client and bind it to the ORM
 client = await PBModel.init_client(
@@ -108,7 +108,7 @@ The collection name will be automatically derived from the class name (pluralize
 - URL: `AnyUrl`
 - DateTime: `datetime`
 - JSON: `List`, `Dict`
-- File: `FileUpload | str`
+- File: `FileUploadORM`
 - Relation: `Union[RelatedModel, str]`
 - Select: `Enum`
 
