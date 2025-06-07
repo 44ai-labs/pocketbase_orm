@@ -36,7 +36,8 @@ class Example(PBModel):  # Collection name will be "examples" by default
     options: list[str]
     email_field: EmailStr | None = None
     related_model: PBReference[RelatedModel]
-    image: FileUploadORM 
+    # Limit file size to 5MB (5242880 bytes)
+    image: FileUploadORM = Field(default=None, json_schema_extra={"maxSize": 5242880})
 
 # Initialize PocketBase client and bind it to the ORM
 client = await PBModel.init_client(
@@ -109,6 +110,7 @@ The collection name will be automatically derived from the class name (pluralize
 - DateTime: `datetime`
 - JSON: `List`, `Dict`
 - File: `FileUploadORM`
+  - You can set a maximum file size limit using `Field(json_schema_extra={"maxSize": 5242880})` (size in bytes)
 - Relation: `Union[RelatedModel, str]`
 - Select: `Enum`
 
