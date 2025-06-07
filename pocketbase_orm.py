@@ -31,6 +31,8 @@ PBReference = (
     PBReferenceType[T] | str
 )  # has to be string to set it correctly when writing a relation id
 
+FileUploadORM = FileUpload | str  # on get we only get a string back
+
 
 def _pluralize(singular: str) -> str:
     """Simple English pluralization."""
@@ -437,7 +439,6 @@ class PBModel(BaseModel):
                         if arg is str:
                             continue
                         if cls._is_reference_type(arg):
-                            print(f"Found reference type for {name}: {arg}")
                             releated_model = cls.get_referenced_pbmodel_type(arg)
                             if releated_model:
                                 related_model = releated_model
@@ -586,7 +587,6 @@ class PBModel(BaseModel):
             self.id = result["id"]
             logger.debug(f"Created new record with ID: {self.id}")
 
-        print("Record, result:", result)
         # Update instance with response data from PocketBase
         self.created = result.get("created", self.created)
         self.updated = result.get("updated", self.updated)
