@@ -20,6 +20,8 @@ ruff-ci:
 typing:
     uvx ty check
 
+check: format typing
+
 # sudo apt install curl unzip
 install-pocketbase:
 	./scripts/install-pocketbase.sh
