@@ -483,6 +483,22 @@ class PBModel(BaseModel):
                     logger.error(f"No valid related model found for field {name}")
                     raise ValueError(f"Invalid relation configuration for field {name}")
 
+            if field_def["type"] == "file":
+                # Check if there's a maxSize parameter in the field info
+                max_size = None
+                if (
+                    hasattr(field_info, "json_schema_extra")
+                    and field_info.json_schema_extra
+                ):
+                    max_size = field_info.json_schema_extra.get("maxSize")
+
+                # Set options if maxSize is provided
+                if max_size is not None:
+                    field_def["maxSize"] = max_size
+                    logger.debug(
+                        f"Configured file field {name} with maxSize: {max_size}"
+                    )
+
             fields.append(field_def)
             logger.debug(f"Added field definition: {field_def}")
 
