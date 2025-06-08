@@ -93,16 +93,16 @@ class PBModel(BaseModel):
     async def init_client(
         cls,
         url: str,
-        admin_email: str | None = None,
-        admin_password: str | None = None,
+        admin_email: str,
+        admin_password: str,
     ) -> PocketBase:
         """
         Initialize a PocketBase client and bind it to the model class.
 
         Args:
             url: The PocketBase server URL
-            admin_email: Optional admin email for authentication
-            admin_password: Optional admin password for authentication
+            admin_email: admin email for authentication
+            admin_password: admin password for authentication
 
         Returns:
             The initialized PocketBase client
@@ -114,6 +114,10 @@ class PBModel(BaseModel):
         if admin_email and admin_password:
             await client.collection("_superusers").auth.with_password(
                 admin_email, admin_password
+            )
+        else:
+            raise ValueError(
+                "Admin credentials are required to initialize the PocketBase client."
             )
         cls.bind_client(client)
         return client
