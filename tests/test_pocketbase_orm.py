@@ -54,6 +54,21 @@ class ModelWithEnum(PBModel, collection="enum_models"):
     user_type: UserType  # Using the actual enum type
 
 
+class OptionalEnumModel(PBModel, collection="optional_enum_models"):
+    name: str
+    user_type: UserType | None = None
+
+
+class ListEnumModel(PBModel, collection="list_enum_models"):
+    name: str
+    user_types: list[UserType]
+
+
+class OptionalListEnumModel(PBModel, collection="optional_list_enum_models"):
+    name: str
+    user_types: list[UserType] | None = None
+
+
 @pytest_asyncio.fixture(scope="function")
 async def setup_models(pb_client):
     """Fixture to bind the client and sync collections."""
@@ -62,10 +77,16 @@ async def setup_models(pb_client):
     await RelatedModel.sync_collection()
     await Example.sync_collection()
     await ModelWithEnum.sync_collection()
+    await OptionalEnumModel.sync_collection()
+    await ListEnumModel.sync_collection()
+    await OptionalListEnumModel.sync_collection()
     await NonTypeChecksModel.sync_collection()
     await JSONTypeandFile.sync_collection()
     yield
     await ModelWithEnum.delete_collection()
+    await OptionalEnumModel.delete_collection()
+    await ListEnumModel.delete_collection()
+    await OptionalListEnumModel.delete_collection()
     await Example.delete_collection()
     await RelatedModel.delete_collection()
     await NonTypeChecksModel.delete_collection()
@@ -382,6 +403,47 @@ async def test_enum_field_handling(setup_models):
     retrieved2 = await ModelWithEnum.get_one(instance2_id)
     assert retrieved2.user_type == UserType.GUEST
     assert isinstance(retrieved2.user_type, UserType)
+
+
+@pytest.mark.asyncio
+async def test_optional_and_list_enums(setup_models):
+    """Ensure optional and list enums are handled correctly."""
+    opt = await OptionalEnumModel(name="Opt", user_type=UserType.REGULAR).save()
+    fetched_opt = await OptionalEnumModel.get_one(opt.id)  # type: ignore
+    assert fetched_opt.user_type == UserType.REGULAR
+    opt_collection = await opt._pb_client.collections.get_one("optional_enum_models")
+    opt_field = next(f for f in opt_collection["fields"] if f["name"] == "user_type")
+    assert opt_field["maxSelect"] == 1
+    assert opt_field["required"] is False
+
+    list_model = await ListEnumModel(
+        name="List", user_types=[UserType.ADMIN, UserType.GUEST]
+    ).save()
+    fetched_list = await ListEnumModel.get_one(list_model.id)  # type: ignore
+    assert fetched_list.user_types == [UserType.ADMIN, UserType.GUEST]
+
+    collection = await list_model._pb_client.collections.get_one("list_enum_models")
+    field = next(f for f in collection["fields"] if f["name"] == "user_types")
+    assert field["type"] == "select"
+    assert field["maxSelect"] == len(UserType)
+
+
+@pytest.mark.asyncio
+async def test_optional_list_enum_model(setup_models):
+    """Ensure optional list of enums works."""
+    model = await OptionalListEnumModel(name="OptListNone").save()
+    fetched = await OptionalListEnumModel.get_one(model.id)  # type: ignore
+    assert fetched.user_types == []
+    collection = await model._pb_client.collections.get_one("optional_list_enum_models")
+    field = next(f for f in collection["fields"] if f["name"] == "user_types")
+    assert field["required"] is False
+    assert field["maxSelect"] == len(UserType)
+
+    model2 = await OptionalListEnumModel(
+        name="OptListVal", user_types=[UserType.REGULAR]
+    ).save()
+    fetched2 = await OptionalListEnumModel.get_one(model2.id)  # type: ignore
+    assert fetched2.user_types == [UserType.REGULAR]
 
 
 @pytest.mark.asyncio
