@@ -19,7 +19,7 @@ async def setup_extra_model(pb_client):
 
 @pytest.mark.asyncio
 async def test_json_schema_extra_applied(setup_extra_model):
-    collection = await ExtraModel._pb_client.collections.get_one("extra_models")
+    collection = await ExtraModel._pb_client.collections.get_one("extra_models")  # type: ignore
     fields = collection["fields"]
     name_field = next((f for f in fields if f["name"] == "name"), None)
     assert name_field is not None
