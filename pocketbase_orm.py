@@ -436,20 +436,31 @@ class PBModel(BaseModel):
             # Add additional configuration for relation fields
             if field_def["type"] == "relation":
                 logger.debug(f"Configuring relation field {name}")
-                # Find the related model in Union types
                 related_model = None
-                if hasattr(field, "__origin__") and cls.is_union_type(field):
-                    for arg in field.__args__:
-                        if arg is str:
-                            continue
-                        if cls._is_reference_type(arg):
-                            releated_model = cls.get_referenced_pbmodel_type(arg)
-                            if releated_model:
-                                related_model = releated_model
-                                logger.debug(
-                                    f"Found related model for {name}: {related_model}"
+                max_select = 1
+                if hasattr(field, "__origin__"):
+                    if cls.is_union_type(field):
+                        for arg in field.__args__:
+                            if arg is str:
+                                continue
+                            if cls._is_reference_list(arg):
+                                related_model = cls.get_referenced_pbmodel_type(
+                                    get_args(arg)[0]
                                 )
-                            break
+                                max_select = 0
+                                break
+                            if cls._is_reference_type(arg):
+                                related_model = cls.get_referenced_pbmodel_type(arg)
+                                max_select = 1
+                                break
+                    elif cls._is_reference_list(field):
+                        related_model = cls.get_referenced_pbmodel_type(
+                            get_args(field)[0]
+                        )
+                        max_select = 0
+                    elif cls._is_reference_type(field):
+                        related_model = cls.get_referenced_pbmodel_type(field)
+                        max_select = 1
                 if related_model:
                     try:
                         logger.debug(
@@ -469,7 +480,7 @@ class PBModel(BaseModel):
                                 "presentable": False,
                                 "cascadeDelete": False,
                                 "minSelect": 0,
-                                "maxSelect": 1,
+                                "maxSelect": max_select,
                                 "collectionId": collection[
                                     "id"
                                 ],  # This must be present and non-empty
@@ -524,6 +535,16 @@ class PBModel(BaseModel):
             return True
         return False
 
+    @staticmethod
+    def _is_reference_list(field_type: type) -> bool:
+        """Check if a type is a list of PBReferenceType."""
+        origin = get_origin(field_type)
+        if origin is list:
+            inner_args = get_args(field_type)
+            if inner_args and PBModel._is_reference_type(inner_args[0]):
+                return True
+        return False
+
     @classmethod
     def _get_field_type(cls, pydantic_field: Any) -> str:
         """
@@ -532,7 +553,12 @@ class PBModel(BaseModel):
         # Get all possible types to check
         types_to_check = []
         if hasattr(pydantic_field, "__origin__"):
+            if cls._is_reference_list(pydantic_field):
+                return "relation"
             if cls.is_union_type(pydantic_field):
+                for arg in pydantic_field.__args__:
+                    if cls._is_reference_list(arg) or cls._is_reference_type(arg):
+                        return "relation"
                 types_to_check.extend(pydantic_field.__args__)
             elif pydantic_field.__origin__ is list:
                 return "json"
