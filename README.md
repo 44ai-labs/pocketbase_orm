@@ -112,6 +112,7 @@ The collection name will be automatically derived from the class name (pluralize
 - JSON: `List`, `Dict`
 - File: `FileUploadORM`
   - You can set a maximum file size limit using `Field(json_schema_extra={"maxSize": 5242880})` (size in bytes)
+- Additional PocketBase field options can be provided for any field using `Field(..., json_schema_extra={...})`. These options are merged into the collection schema during `sync_collection`.
 - Relation: `Union[RelatedModel, str]`
 - Select: `Enum`
 
