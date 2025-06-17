@@ -2,12 +2,7 @@ name: Typing
 
 on:
   push:
-    branches: [main]
-    paths-ignore:
-      - "README.md"
-      - "*.md"
   pull_request:
-    branches: [main]
 
 jobs:
   typing-checks:
