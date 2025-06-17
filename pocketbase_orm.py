@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, TypeVar, Generic, get_origin, get_args, Type
+from typing import Any, Dict, TypeVar, Generic, Union, get_origin, get_args, Type, List
 import typing
 import types
 
@@ -30,6 +30,9 @@ class PBReferenceType(Generic[T]):
 PBReference = (
     PBReferenceType[T] | str
 )  # has to be string to set it correctly when writing a relation id
+
+# Support for lists of references
+PBReferenceList = List[PBReference[T]] | List[str]
 
 FileUploadORM = FileUpload | str  # on get we only get a string back
 
@@ -193,7 +196,7 @@ class PBModel(BaseModel):
     def _process_record_data(cls, record_data: Record) -> Dict[str, Any]:
         """
         Process record data before model validation.
-        Handles special cases like file fields.
+        Handles special cases like file fields and reference lists.
         """
         processed_data = record_data.copy()
 
@@ -208,6 +211,16 @@ class PBModel(BaseModel):
             # Handle file fields - convert empty strings to None
             if is_file_field and processed_data[field_name] == "":
                 processed_data[field_name] = None
+
+            # Handle reference list fields - ensure they're lists
+            if cls._is_reference_list_type(field_type):
+                value = processed_data[field_name]
+                if isinstance(value, str) and value:
+                    # Single ID as string, convert to list
+                    processed_data[field_name] = [value]
+                elif not isinstance(value, list):
+                    # Ensure it's a list (empty if None/empty)
+                    processed_data[field_name] = [] if not value else [value]
 
             if field_type is not str and processed_data[field_name] == "":
                 # Convert empty strings to None for non-string fields
@@ -312,6 +325,18 @@ class PBModel(BaseModel):
         }
         new_fields = await cls._generate_fields()
         all_fields = {field["name"]: field for field in new_fields}
+        
+        # log all changed types of each field
+        for field_name, field in all_fields.items():
+            if field_name in current_fields:
+                current_type = current_fields[field_name]["type"]
+                new_type = field["type"]
+                if current_type != new_type:
+                    logger.debug(
+                        f"Field '{field_name}' type changed from '{current_type}' to '{new_type}'"
+                    )
+            else:
+                logger.debug(f"New field '{field_name}' will be added.")
 
         # Preserve existing fields and add new ones
         final_fields = []
@@ -371,6 +396,57 @@ class PBModel(BaseModel):
         return None
 
     @classmethod
+    def _is_reference_list_type(cls, field_type: Any) -> bool:
+        """Check if a type represents a list of PBReferences."""
+        origin = get_origin(field_type)
+        
+        # Handle direct List[PBReference[T]] or List[str]
+        if origin is list or origin is List:
+            args = get_args(field_type)
+            if args:
+                inner_type = args[0]
+                return (cls._is_reference_type(inner_type) or 
+                       inner_type is str or
+                       (hasattr(inner_type, "__origin__") and 
+                        get_origin(inner_type) is Union and 
+                        any(cls._is_reference_type(arg) or arg is str for arg in get_args(inner_type))))
+        
+        # Handle Union types that contain lists of references
+        if cls.is_union_type(field_type):
+            for arg in get_args(field_type):
+                if cls._is_reference_list_type(arg):
+                    return True
+                    
+        return False
+
+    @classmethod
+    def _extract_reference_model_from_list_type(cls, field_type: Any) -> Type["PBModel"] | None:
+        """Extract the referenced model type from a list reference type."""
+        origin = get_origin(field_type)
+        
+        # Handle List[PBReference[T]]
+        if origin is list or origin is List:
+            args = get_args(field_type)
+            if args:
+                inner_type = args[0]
+                if cls._is_reference_type(inner_type):
+                    return cls.get_referenced_pbmodel_type(inner_type)
+                # Handle List[Union[PBReference[T], str]]
+                elif hasattr(inner_type, "__origin__") and get_origin(inner_type) is Union:
+                    for union_arg in get_args(inner_type):
+                        if cls._is_reference_type(union_arg):
+                            return cls.get_referenced_pbmodel_type(union_arg)
+        
+        # Handle Union types containing lists
+        if cls.is_union_type(field_type):
+            for arg in get_args(field_type):
+                result = cls._extract_reference_model_from_list_type(arg)
+                if result:
+                    return result
+                    
+        return None
+
+    @classmethod
     async def _generate_fields(cls) -> list[Dict[str, Any]]:
         """
         Generate the field definitions for the collection based on the Pydantic model.
@@ -408,7 +484,7 @@ class PBModel(BaseModel):
             if name in ["id", "created", "updated"]:  # Skip base model fields
                 continue
 
-            field_def = {"name": name, "type": cls._get_field_type(field)}
+            field_def = {"name": name, "type": cls._get_field_type(field, name)}
             logger.debug(f"Processing field {name} with type {field_def['type']}")
 
             # Get field info from Pydantic model
@@ -417,40 +493,89 @@ class PBModel(BaseModel):
 
             # Configure enum select field options if applicable
             let_enum = None
+            is_list = False
+
+            def extract_enum_from_type(type_hint):
+                """Recursively extract enum type from complex type hints"""
+                if isinstance(type_hint, type) and issubclass(type_hint, Enum):
+                    return type_hint, False
+                
+                if hasattr(type_hint, "__origin__"):
+                    origin = type_hint.__origin__
+                    
+                    # Handle Union types (including Optional which is Union[T, None])
+                    if origin is Union:
+                        for arg in type_hint.__args__:
+                            if arg is type(None):  # Skip None type in Optional
+                                continue
+                            enum_type, is_list_inner = extract_enum_from_type(arg)
+                            if enum_type:
+                                return enum_type, is_list_inner
+                    
+                    # Handle List types
+                    elif origin in (list, List) or (hasattr(origin, '__name__') and 'list' in origin.__name__.lower()):
+                        if hasattr(type_hint, "__args__") and type_hint.__args__:
+                            inner_type = type_hint.__args__[0]
+                            enum_type, _ = extract_enum_from_type(inner_type)
+                            if enum_type:
+                                return enum_type, True
+                
+                return None, False
+
+            # Check if field is a union type (for backward compatibility)
             if hasattr(field, "__origin__") and cls.is_union_type(field):
                 for arg in field.__args__:
                     if isinstance(arg, type) and issubclass(arg, Enum):
                         let_enum = arg
                         break
+                    # Check for List[Enum] within Union
+                    elif hasattr(arg, "__origin__"):
+                        enum_type, is_list_inner = extract_enum_from_type(arg)
+                        if enum_type:
+                            let_enum = enum_type
+                            is_list = is_list_inner
+                            break
+            # Handle direct enum type
             elif isinstance(field, type) and issubclass(field, Enum):
                 let_enum = field
+            else:
+                # Use the helper function for complex types
+                let_enum, is_list = extract_enum_from_type(field)
 
+            # Configure the field definition
             if let_enum is not None and field_def["type"] == "select":
-                field_def.update(
-                    {
-                        "maxSelect": 1,
-                        "values": [e.value for e in let_enum],
-                    }
-                )
-                logger.debug(f"Configured enum select field {name} with: {field_def}")
+                field_def.update({
+                    "maxSelect": None if is_list else 1,  # Allow multiple selections for lists
+                    "values": [e.value for e in let_enum],
+                })
+                logger.error(f"Configured enum select field {name} with: {field_def}")
 
             # Add additional configuration for relation fields
             if field_def["type"] == "relation":
                 logger.debug(f"Configuring relation field {name}")
-                # Find the related model in Union types
+                
+                # Check if it's a list of references
+                is_reference_list = cls._is_reference_list_type(field)
                 related_model = None
-                if hasattr(field, "__origin__") and cls.is_union_type(field):
-                    for arg in field.__args__:
-                        if arg is str:
-                            continue
-                        if cls._is_reference_type(arg):
-                            releated_model = cls.get_referenced_pbmodel_type(arg)
-                            if releated_model:
-                                related_model = releated_model
-                                logger.debug(
-                                    f"Found related model for {name}: {related_model}"
-                                )
-                            break
+                
+                if is_reference_list:
+                    related_model = cls._extract_reference_model_from_list_type(field)
+                    logger.debug(f"Found list reference field {name} to model: {related_model}")
+                else:
+                    # Find the related model in Union types (single reference)
+                    if hasattr(field, "__origin__") and cls.is_union_type(field):
+                        for arg in field.__args__:
+                            if arg is str:
+                                continue
+                            if cls._is_reference_type(arg):
+                                releated_model = cls.get_referenced_pbmodel_type(arg)
+                                if releated_model:
+                                    related_model = releated_model
+                                    logger.debug(
+                                        f"Found related model for {name}: {related_model}"
+                                    )
+                                break
+                
                 if related_model:
                     try:
                         logger.debug(
@@ -470,7 +595,7 @@ class PBModel(BaseModel):
                                 "presentable": False,
                                 "cascadeDelete": False,
                                 "minSelect": 0,
-                                "maxSelect": 1,
+                                "maxSelect": None if is_reference_list else 1,  # Allow multiple for lists
                                 "collectionId": collection[
                                     "id"
                                 ],  # This must be present and non-empty
@@ -512,8 +637,12 @@ class PBModel(BaseModel):
 
     @staticmethod
     def _is_enum_type(field_type: Any) -> bool:
-        """Check if a type is an Enum subclass."""
-        return isinstance(field_type, type) and issubclass(field_type, Enum)
+        """Check if a type is an Enum subclass. Or a list of Enums"""
+        return (isinstance(field_type, type) and issubclass(field_type, Enum)) or (
+            hasattr(field_type, "__origin__")
+            and field_type.__origin__ is list
+            and all(isinstance(arg, type) and issubclass(arg, Enum) for arg in field_type.__args__)
+        )
 
     @staticmethod
     def _is_reference_type(field_type: type) -> bool:
@@ -526,10 +655,14 @@ class PBModel(BaseModel):
         return False
 
     @classmethod
-    def _get_field_type(cls, pydantic_field: Any) -> str:
+    def _get_field_type(cls, pydantic_field: Any, name: str) -> str:
         """
         Convert the Pydantic field type into a PocketBase field type.
         """
+        # Check for list of references first
+        if cls._is_reference_list_type(pydantic_field):
+            return "relation"
+            
         # Get all possible types to check
         types_to_check = []
         if hasattr(pydantic_field, "__origin__"):
@@ -551,6 +684,9 @@ class PBModel(BaseModel):
                 return "relation"
             if field_type == FileUpload:
                 return "file"
+            
+            if name == "password" or name == "passwordConfirm":
+                return "password"
 
             # Basic types
             if field_type is str:
@@ -577,7 +713,7 @@ class PBModel(BaseModel):
         """
         collection = self.get_collection()
 
-        # Prepare data for saving - handle file uploads specially
+        # Prepare data for saving - handle file uploads and reference lists specially
         data = {}
         for field_name, field_info in self.model_fields.items():
             if field_name in ("created", "updated"):
@@ -590,8 +726,31 @@ class PBModel(BaseModel):
             if isinstance(field_value, FileUpload):
                 # Keep FileUpload objects as-is
                 data[field_name] = field_value
+            elif isinstance(field_value, list):
+                # Handle lists - particularly reference lists
+                field_type = self.__annotations__.get(field_name)
+                if self._is_reference_list_type(field_type):
+                    # For reference lists, convert PBReference objects to IDs
+                    processed_list = []
+                    for item in field_value:
+                        if isinstance(item, str):
+                            processed_list.append(item)
+                        elif hasattr(item, 'id'):
+                            processed_list.append(item.id)
+                        else:
+                            processed_list.append(str(item))
+                    data[field_name] = processed_list
+                else:
+                    # For other lists, use model_dump serialization
+                    try:
+                        data[field_name] = self.model_dump(
+                            include={field_name}, mode="json"
+                        )[field_name]
+                    except Exception as e:
+                        logger.warning(f"Error serializing field {field_name}: {e}")
+                        data[field_name] = field_value
             else:
-                # For non-file fields, use model_dump to handle serialization
+                # For non-file, non-list fields, use model_dump to handle serialization
                 try:
                     data[field_name] = self.model_dump(
                         include={field_name}, mode="json"
