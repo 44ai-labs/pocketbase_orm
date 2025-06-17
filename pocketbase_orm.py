@@ -324,7 +324,7 @@ class PBModel(BaseModel):
             field_dict = {
                 "name": field["name"],
                 "type": field["type"],
-                "id": field["id"],
+                "id": field["id"] if "id" in field else None,
                 "required": field["required"] if "required" in field else False,
                 "system": field["system"],
                 "onCreate": field["onCreate"] if "onCreate" in field else False,
