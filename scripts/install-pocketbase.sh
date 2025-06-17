@@ -5,7 +5,7 @@ set -euo pipefail
 INSTALL_DIR="$(pwd)/db"
 mkdir -p "$INSTALL_DIR"
 
-DOWNLOAD_URL="https://github.com/pocketbase/pocketbase/releases/download/v0.28.0/pocketbase_0.28.0_linux_amd64.zip"
+DOWNLOAD_URL="https://github.com/pocketbase/pocketbase/releases/download/v0.28.3/pocketbase_0.28.3_linux_amd64.zip"
 TMPDIR="$(mktemp -d)"
 
 FILE_NAME="pocketbase_0.28.0_linux_amd64.zip"
