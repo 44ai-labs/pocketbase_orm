@@ -33,6 +33,8 @@ PBReference = (
 
 FileUploadORM = FileUpload | str  # on get we only get a string back
 
+PBPassword = str | None  # Only needed for create and update
+
 
 def _pluralize(singular: str) -> str:
     """Simple English pluralization."""
@@ -556,7 +558,8 @@ class PBModel(BaseModel):
                 return "relation"
             if field_type == FileUpload:
                 return "file"
-
+            if field_type == PBPassword:
+                return "password"
             # Basic types
             if field_type is str:
                 return "text"
@@ -670,8 +673,12 @@ class User(PBModel, collection="users"):
     """Model class for PocketBase's built-in users collection."""
 
     email: EmailStr
-    password: str | None = None  # Only used when creating/updating
-    passwordConfirm: str | None = None  # Required when creating/updating password
+    password: str | None = Field(
+        default=None, min_length=8, max_length=64
+    )  # Only used when creating/updating
+    passwordConfirm: str | None = Field(
+        default=None, min_length=8, max_length=64
+    )  # Only used when creating/updating
     emailVisibility: bool = False
     verified: bool = False
     name: str | None = Field(default=None, min_length=0)
