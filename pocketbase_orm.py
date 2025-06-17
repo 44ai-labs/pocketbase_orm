@@ -187,9 +187,11 @@ class PBModel(BaseModel):
     @classmethod
     def is_file_upload_union(cls, field_type):
         args = get_args(field_type)
-        return (
-            cls.is_union_type(field_type) and FileUpload in args
-        ) or field_type is FileUpload
+        if cls.is_union_type(field_type) and FileUpload in args:
+            return True
+        if get_origin(field_type) is list and FileUpload in args:
+            return True
+        return field_type is FileUpload
 
     @classmethod
     def _process_record_data(cls, record_data: Record) -> Dict[str, Any]:
@@ -524,6 +526,31 @@ class PBModel(BaseModel):
                 logger.debug(
                     f"Merged json_schema_extra for {name}: {field_info.json_schema_extra}"
                 )
+            if field_def["type"] == "file":
+                # Check if there's a maxSize parameter in the field info
+                max_size = None
+                if (
+                    hasattr(field_info, "json_schema_extra")
+                    and field_info.json_schema_extra
+                ):
+                    max_size = field_info.json_schema_extra.get("maxSize")
+
+                # Determine minSelect and maxSelect based on the field type
+                if get_origin(field) is list and FileUpload in get_args(field):
+                    # Lists allow unlimited files
+                    field_def["minSelect"] = 0
+                    field_def["maxSelect"] = 0
+                else:
+                    # Optional fields have minSelect 0, required fields 1
+                    field_def["minSelect"] = 1 if field_info.is_required() else 0
+                    field_def["maxSelect"] = 1
+
+                # Set options if maxSize is provided
+                if max_size is not None:
+                    field_def["maxSize"] = max_size
+                    logger.debug(
+                        f"Configured file field {name} with maxSize: {max_size}"
+                    )
 
             fields.append(field_def)
             logger.debug(f"Added field definition: {field_def}")
@@ -575,6 +602,10 @@ class PBModel(BaseModel):
                 item_type = pydantic_field.__args__[0]
                 if PBModel._is_enum_type(item_type):
                     return "select"
+                # Handle List[FileUpload] specially so it's treated as a
+                # PocketBase file field rather than JSON
+                if FileUpload in getattr(pydantic_field, "__args__", []):
+                    return "file"
                 return "json"
         elif hasattr(pydantic_field, "__or__") and hasattr(pydantic_field, "__args__"):
             types_to_check.extend(pydantic_field.__args__)
