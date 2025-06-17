@@ -405,7 +405,12 @@ class PBModel(BaseModel):
         )
 
         for name, field in cls.__annotations__.items():
-            if name in ["id", "created", "updated"]:  # Skip base model fields
+            if name in [
+                "id",
+                "created",
+                "updated",
+                "passwordConfirm",
+            ]:  # Skip base model fields
                 continue
 
             field_def = {"name": name, "type": cls._get_field_type(field)}
@@ -676,12 +681,5 @@ class User(PBModel, collection="users"):
     def _create_collection(cls):
         """Override to prevent creation of system collection."""
         raise RuntimeError(
-            "Cannot create or modify the users collection as it is a system collection."
-        )
-
-    @classmethod
-    def _update_collection(cls, existing_collection):
-        """Override to prevent modification of system collection."""
-        raise RuntimeError(
-            "Cannot create or modify the users collection as it is a system collection."
+            "Cannot create the users collection as it is a system collection."
         )

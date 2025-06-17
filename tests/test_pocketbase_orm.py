@@ -58,6 +58,7 @@ class ModelWithEnum(PBModel, collection="enum_models"):
 async def setup_models(pb_client):
     """Fixture to bind the client and sync collections."""
     PBModel.bind_client(pb_client)
+    await User.sync_collection()
     await RelatedModel.sync_collection()
     await Example.sync_collection()
     await ModelWithEnum.sync_collection()
@@ -221,15 +222,6 @@ async def test_user_collection_operations(setup_models):
     # Test that attempting to create users collection raises error
     with pytest.raises(RuntimeError) as exc_info:
         User._create_collection()
-    assert "system collection" in str(exc_info.value)
-
-    # Test that attempting to update users collection raises error
-    with pytest.raises(RuntimeError) as exc_info:
-        # Create mock collection object with minimal required attributes
-        mock_collection = type(
-            "MockCollection", (), {"id": "mock_id", "name": "users", "fields": []}
-        )
-        User._update_collection(mock_collection)
     assert "system collection" in str(exc_info.value)
 
     # Test that we can still create and work with User instances
