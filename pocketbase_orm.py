@@ -416,20 +416,29 @@ class PBModel(BaseModel):
 
             # Configure enum select field options if applicable
             let_enum = None
-            if hasattr(field, "__origin__") and cls.is_union_type(field):
-                for arg in field.__args__:
-                    if isinstance(arg, type) and issubclass(arg, Enum):
+            max_select = 1
+            if cls.is_union_type(field):
+                for arg in get_args(field):
+                    if getattr(arg, "__origin__", None) is list:
+                        inner = get_args(arg)[0]
+                        if isinstance(inner, type) and issubclass(inner, Enum):
+                            let_enum = inner
+                            max_select = len(list(let_enum))
+                            break
+                    elif isinstance(arg, type) and issubclass(arg, Enum):
                         let_enum = arg
                         break
+            elif getattr(field, "__origin__", None) is list:
+                inner = get_args(field)[0]
+                if isinstance(inner, type) and issubclass(inner, Enum):
+                    let_enum = inner
+                    max_select = len(list(let_enum))
             elif isinstance(field, type) and issubclass(field, Enum):
                 let_enum = field
 
             if let_enum is not None and field_def["type"] == "select":
                 field_def.update(
-                    {
-                        "maxSelect": 1,
-                        "values": [e.value for e in let_enum],
-                    }
+                    {"maxSelect": max_select, "values": [e.value for e in let_enum]}
                 )
                 logger.debug(f"Configured enum select field {name} with: {field_def}")
 
@@ -535,6 +544,9 @@ class PBModel(BaseModel):
             if cls.is_union_type(pydantic_field):
                 types_to_check.extend(pydantic_field.__args__)
             elif pydantic_field.__origin__ is list:
+                item_type = pydantic_field.__args__[0]
+                if PBModel._is_enum_type(item_type):
+                    return "select"
                 return "json"
         elif hasattr(pydantic_field, "__or__") and hasattr(pydantic_field, "__args__"):
             types_to_check.extend(pydantic_field.__args__)
@@ -543,6 +555,12 @@ class PBModel(BaseModel):
 
         # Check all types in priority order
         for field_type in types_to_check:
+            origin = get_origin(field_type)
+            if origin is list:
+                item_type = get_args(field_type)[0]
+                if PBModel._is_enum_type(item_type):
+                    return "select"
+                return "json"
             # Special types
             if PBModel._is_enum_type(field_type):
                 return "select"
