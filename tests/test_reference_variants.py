@@ -40,15 +40,39 @@ async def test_reference_types(setup_reference_models, pb_client):
         name="Tester",
     ).save()
 
+    user2 = await User(
+        email=f"test2.{uuid.uuid4()}@example.com",
+        password="password123",
+        passwordConfirm="password123",
+        name="Tester2",
+    ).save()
+
+    collection = await SingleOptional._pb_client.collections.get_one(  # type: ignore
+        "single_optional"
+    )
+    fields = {f["name"]: f for f in collection["fields"]}
+    assert fields["user"].get("type") == "relation"
+    assert fields["user"].get("maxSelect") == 1
+    print(fields["user"])
+
     single = SingleOptional(name="s", user=user.id)
     await single.save()
     retrieved_single = await SingleOptional.get_one(single.id)  # type: ignore
     assert retrieved_single.user == user.id
 
-    multi = MultiRef(name="m", users=[user.id])
+    collection = await SingleOptional._pb_client.collections.get_one(  # type: ignore
+        "multi_ref"
+    )
+    fields = {f["name"]: f for f in collection["fields"]}
+    print(fields["users"])
+    assert fields["users"].get("type") == "relation"
+    assert fields["users"].get("maxSelect") == 999
+
+    multi = MultiRef(name="m", users=[user.id, user2.id])
     await multi.save()
     retrieved_multi = await MultiRef.get_one(multi.id)  # type: ignore
-    assert retrieved_multi.users == [user.id]
+    print(retrieved_multi.users)
+    assert retrieved_multi.users == [user.id, user2.id]
 
     multi_opt = MultiOptional(name="o", users=[user.id])
     await multi_opt.save()
@@ -57,7 +81,7 @@ async def test_reference_types(setup_reference_models, pb_client):
 
     col = await pb_client.collections.get_one("multi_ref")
     field = next(f for f in col["fields"] if f["name"] == "users")
-    assert field.get("maxSelect", 0) == 0
+    assert field.get("maxSelect", 0) == 999
 
     col_single = await pb_client.collections.get_one("single_optional")
     field_single = next(f for f in col_single["fields"] if f["name"] == "user")
