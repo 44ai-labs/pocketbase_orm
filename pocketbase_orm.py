@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, TypeVar, Generic, get_origin, get_args, Type
 import typing
+from typing import Union, List
 import types
 
 import httpx
@@ -44,6 +45,30 @@ def _pluralize(singular: str) -> str:
         return singular + "es"
     else:
         return singular + "s"
+
+
+def unroll_types(t):
+    origin = get_origin(t)
+    args = get_args(t)
+
+    # 1) typing.Union[...] or PEP604 X|Y
+    if origin is Union or origin is types.UnionType:
+        out = []
+        for sub in args:
+            if sub is type(None):
+                continue
+            out.extend(unroll_types(sub))
+        return out
+
+    # 2) list[...] or PBReferenceType[...]
+    if origin in (list, List, PBReferenceType):
+        out = [origin]
+        for sub in args:
+            out.extend(unroll_types(sub))
+        return out
+
+    # 3) leaf
+    return [t]
 
 
 class PBModel(BaseModel):
@@ -206,6 +231,8 @@ class PBModel(BaseModel):
             if field_name not in processed_data:
                 continue
 
+            print(f"Processing field '{field_name}' with type '{field_type}'")
+
             # Check if field is a file type (in a Union)
             is_file_field = cls.is_file_upload_union(field_type)
 
@@ -216,6 +243,15 @@ class PBModel(BaseModel):
             if field_type is not str and processed_data[field_name] == "":
                 # Convert empty strings to None for non-string fields
                 processed_data[field_name] = None
+
+            flattend = unroll_types(field_type)
+
+            is_list_field = False
+            if list in flattend or List in flattend:
+                is_list_field = True
+            if is_list_field and not isinstance(processed_data[field_name], list):
+                # If it's a list field, ensure it's a list
+                processed_data[field_name] = [processed_data[field_name]]
 
         return processed_data
 
@@ -425,97 +461,51 @@ class PBModel(BaseModel):
             field_def["required"] = field_info.is_required()
 
             # Configure enum select field options if applicable
-            let_enum = None
             max_select = 1
-            if cls.is_union_type(field):
-                for arg in get_args(field):
-                    if getattr(arg, "__origin__", None) is list:
-                        inner = get_args(arg)[0]
-                        if isinstance(inner, type) and issubclass(inner, Enum):
-                            let_enum = inner
-                            max_select = len(list(let_enum))
-                            break
-                    elif isinstance(arg, type) and issubclass(arg, Enum):
-                        let_enum = arg
-                        break
-            elif getattr(field, "__origin__", None) is list:
-                inner = get_args(field)[0]
-                if isinstance(inner, type) and issubclass(inner, Enum):
-                    let_enum = inner
-                    max_select = len(list(let_enum))
-            elif isinstance(field, type) and issubclass(field, Enum):
-                let_enum = field
-
-            if let_enum is not None and field_def["type"] == "select":
-                field_def.update(
-                    {"maxSelect": max_select, "values": [e.value for e in let_enum]}
-                )
-                logger.debug(f"Configured enum select field {name} with: {field_def}")
+            flattend = unroll_types(field)
+            # for file, relation, and enum lists
+            if list in flattend or List in flattend:
+                # If it's a list of enums, treat it as a multi-select
+                max_select = 999
 
             # Add additional configuration for relation fields
             if field_def["type"] == "relation":
-                logger.debug(f"Configuring relation field {name}")
                 related_model = None
-                max_select = 1
-                if hasattr(field, "__origin__"):
-                    if cls.is_union_type(field):
-                        for arg in field.__args__:
-                            if arg is str:
-                                continue
-                            if cls._is_reference_list(arg):
-                                related_model = cls.get_referenced_pbmodel_type(
-                                    get_args(arg)[0]
-                                )
-                                max_select = 0
-                                break
-                            if cls._is_reference_type(arg):
-                                related_model = cls.get_referenced_pbmodel_type(arg)
-                                max_select = 1
-                                break
-                    elif cls._is_reference_list(field):
-                        related_model = cls.get_referenced_pbmodel_type(
-                            get_args(field)[0]
-                        )
-                        max_select = 0
-                    elif cls._is_reference_type(field):
-                        related_model = cls.get_referenced_pbmodel_type(field)
-                        max_select = 1
-                if related_model:
-                    try:
-                        logger.debug(
-                            f"Looking up collection for {related_model.get_collection_name()}"
-                        )
-                        collection = await cls._pb_client.collections.get_one(
-                            related_model.get_collection_name()
-                        )
-                        logger.debug(f"Found collection for {name}: {collection['id']}")
+                for arg in flattend:
+                    if isinstance(arg, type) and issubclass(arg, PBModel):
+                        print("  → found related PBModel:", arg)
+                        related_model = arg
+                        break
+                    if related_model is not None:
+                        break
+                if related_model is None:
+                    raise TypeError(
+                        f"Field '{name}' is defined as a relation but no PBModel type found."
+                    )
+                # fetch target collection id
+                try:
+                    coll = await cls._pb_client.collections.get_one(
+                        related_model.get_collection_name()
+                    )
 
-                        field_def.update(
-                            {
-                                "name": name,
-                                "type": "relation",
-                                "system": False,
-                                "required": field_info.is_required(),
-                                "presentable": False,
-                                "cascadeDelete": False,
-                                "minSelect": 0,
-                                "maxSelect": max_select,
-                                "collectionId": collection[
-                                    "id"
-                                ],  # This must be present and non-empty
-                            }
-                        )
-
-                        logger.debug(f"Field definition for {name}: {field_def}")
-                    except Exception as e:
-                        logger.error(
-                            f"Error getting collection ID for {related_model.get_collection_name()}: {e}",
-                            exc_info=True,
-                        )
-                        raise
-                else:
-                    logger.error(f"No valid related model found for field {name}")
-                    raise ValueError(f"Invalid relation configuration for field {name}")
+                    field_def.update(
+                        {
+                            "system": False,
+                            "required": field_info.is_required(),
+                            "presentable": False,
+                            "cascadeDelete": False,
+                            "minSelect": 0,
+                            "maxSelect": max_select,
+                            "collectionId": coll["id"],
+                        }
+                    )
+                    logger.debug(f"Field definition for {name}: {field_def}")
+                except Exception as e:
+                    logger.error(
+                        f"Error getting collection ID for {related_model.get_collection_name()}: {e}",
+                        exc_info=True,
+                    )
+                    raise
 
             # Merge additional options defined via json_schema_extra
             if (
@@ -586,66 +576,49 @@ class PBModel(BaseModel):
     @classmethod
     def _get_field_type(cls, pydantic_field: Any) -> str:
         """
-        Convert the Pydantic field type into a PocketBase field type.
+        Convert a (possibly parametrised) Pydantic type into the
+        corresponding PocketBase field type.
+
+        Handles:
+        • plain types            → str, int, PBReferenceType, …
+        • typing.Union[...]      → Union[str, PBReferenceType, …]
+        • PEP 604 unions (A | B) → UnionType
+        • Annotated[T, …]        (Pydantic v2)
+        • nested List[ … ]
         """
-        # Get all possible types to check
-        types_to_check = []
-        if hasattr(pydantic_field, "__origin__"):
-            if cls._is_reference_list(pydantic_field):
-                return "relation"
-            if cls.is_union_type(pydantic_field):
-                for arg in pydantic_field.__args__:
-                    if cls._is_reference_list(arg) or cls._is_reference_type(arg):
-                        return "relation"
-                types_to_check.extend(pydantic_field.__args__)
-            elif pydantic_field.__origin__ is list:
-                item_type = pydantic_field.__args__[0]
-                if PBModel._is_enum_type(item_type):
-                    return "select"
-                # Handle List[FileUpload] specially so it's treated as a
-                # PocketBase file field rather than JSON
-                if FileUpload in getattr(pydantic_field, "__args__", []):
-                    return "file"
-                return "json"
-        elif hasattr(pydantic_field, "__or__") and hasattr(pydantic_field, "__args__"):
-            types_to_check.extend(pydantic_field.__args__)
-        else:
-            types_to_check.append(pydantic_field)
 
-        # Check all types in priority order
-        for field_type in types_to_check:
-            origin = get_origin(field_type)
-            if origin is list:
-                item_type = get_args(field_type)[0]
-                if PBModel._is_enum_type(item_type):
-                    return "select"
-                return "json"
-            # Special types
-            if PBModel._is_enum_type(field_type):
-                return "select"
-            if PBModel._is_reference_type(field_type):
-                return "relation"
-            if field_type == FileUpload:
-                return "file"
-            if field_type == PBPassword:
-                return "password"
-            # Basic types
-            if field_type is str:
-                return "text"
-            if field_type in (int, float):
-                return "number"
-            if field_type is bool:
-                return "bool"
-            if field_type == EmailStr:
-                return "email"
-            if field_type == AnyUrl:
-                return "url"
-            if field_type == datetime:
-                return "date"
-            if isinstance(field_type, (list, dict)):
-                return "json"
+        layers = unroll_types(pydantic_field)
+        print(f"layers: {layers}")
 
-        # Default to json for complex types
+        # ------------------------------------------------------------------ #
+        # 2. Decide in priority order
+        # ------------------------------------------------------------------ #
+        # PocketBase-specific helpers first
+        if PBReferenceType in layers:
+            return "relation"
+        if FileUpload in layers:
+            return "file"
+        if Enum in layers:
+            return "select"
+        if PBPassword in layers:
+            return "password"
+        if datetime in layers:
+            return "date"
+        if AnyUrl in layers:
+            return "url"
+        if EmailStr in layers:
+            return "email"
+        if int in layers or float in layers:
+            # If we have a numeric type, treat it as a number
+            return "number"
+        if str in layers:
+            # If we have a string type, treat it as text
+            return "text"
+        if bool in layers:
+            # If we have a boolean type, treat it as a bool
+            return "bool"
+
+        # Anything else we can’t classify:
         return "json"
 
     async def save(self) -> T:
@@ -673,6 +646,7 @@ class PBModel(BaseModel):
                     data[field_name] = self.model_dump(
                         include={field_name}, mode="json"
                     )[field_name]
+                    print(f"Serialized field {field_name}: {data[field_name]}")
                 except Exception as e:
                     logger.warning(f"Error serializing field {field_name}: {e}")
                     data[field_name] = field_value
