@@ -231,8 +231,6 @@ class PBModel(BaseModel):
             if field_name not in processed_data:
                 continue
 
-            print(f"Processing field '{field_name}' with type '{field_type}'")
-
             # Check if field is a file type (in a Union)
             is_file_field = cls.is_file_upload_union(field_type)
 
@@ -246,12 +244,18 @@ class PBModel(BaseModel):
 
             flattend = unroll_types(field_type)
 
-            is_list_field = False
-            if list in flattend or List in flattend:
-                is_list_field = True
-            if is_list_field and not isinstance(processed_data[field_name], list):
-                # If it's a list field, ensure it's a list
-                processed_data[field_name] = [processed_data[field_name]]
+            field_type_str = cls._get_field_type(field_type)
+            if (
+                field_type_str == "relation"
+                or field_type_str == "select"
+                or field_type_str == "file"
+            ):
+                is_list_field = False
+                if list in flattend or List in flattend:
+                    is_list_field = True
+                if is_list_field and not isinstance(processed_data[field_name], list):
+                    # If it's a list field, ensure it's a list
+                    processed_data[field_name] = [processed_data[field_name]]
 
         return processed_data
 
@@ -468,12 +472,27 @@ class PBModel(BaseModel):
                 # If it's a list of enums, treat it as a multi-select
                 max_select = 999
 
+            if field_def["type"] == "select":
+                enum = None
+                for arg in flattend:
+                    if isinstance(arg, type) and issubclass(arg, Enum):
+                        enum = arg
+                        break
+                if enum is None:
+                    raise TypeError(
+                        f"Field '{name}' is defined as a select but no Enum type found."
+                    )
+                if max_select == 999:
+                    max_select = len(enum)
+                field_def.update(
+                    {"maxSelect": max_select, "values": [e.value for e in enum]}
+                )
+
             # Add additional configuration for relation fields
             if field_def["type"] == "relation":
                 related_model = None
                 for arg in flattend:
                     if isinstance(arg, type) and issubclass(arg, PBModel):
-                        print("  → found related PBModel:", arg)
                         related_model = arg
                         break
                     if related_model is not None:
@@ -588,7 +607,6 @@ class PBModel(BaseModel):
         """
 
         layers = unroll_types(pydantic_field)
-        print(f"layers: {layers}")
 
         # ------------------------------------------------------------------ #
         # 2. Decide in priority order
@@ -598,7 +616,7 @@ class PBModel(BaseModel):
             return "relation"
         if FileUpload in layers:
             return "file"
-        if Enum in layers:
+        if any(isinstance(t, type) and issubclass(t, Enum) for t in layers):
             return "select"
         if PBPassword in layers:
             return "password"
@@ -611,13 +629,17 @@ class PBModel(BaseModel):
         if int in layers or float in layers:
             # If we have a numeric type, treat it as a number
             return "number"
-        if str in layers:
-            # If we have a string type, treat it as text
-            return "text"
+        if list in layers or List in layers:
+            return "json"
+        if dict in layers:
+            # If we have a dict type, treat it as JSON
+            return "json"
         if bool in layers:
             # If we have a boolean type, treat it as a bool
             return "bool"
-
+        if str in layers:
+            # If we have a string type, treat it as text
+            return "text"
         # Anything else we can’t classify:
         return "json"
 
@@ -646,7 +668,6 @@ class PBModel(BaseModel):
                     data[field_name] = self.model_dump(
                         include={field_name}, mode="json"
                     )[field_name]
-                    print(f"Serialized field {field_name}: {data[field_name]}")
                 except Exception as e:
                     logger.warning(f"Error serializing field {field_name}: {e}")
                     data[field_name] = field_value
