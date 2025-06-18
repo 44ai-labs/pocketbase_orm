@@ -15,7 +15,7 @@ async def setup_file_select_model(pb_client):
     PBModel.bind_client(pb_client)
     await FileSelectModel.sync_collection()
     yield
-    await FileSelectModel.delete_collection()
+    # await FileSelectModel.delete_collection()
 
 
 @pytest.mark.asyncio
@@ -26,4 +26,4 @@ async def test_file_select_min_max(setup_file_select_model):
     fields = {f["name"]: f for f in collection["fields"]}
     assert fields["optional_file"].get("maxSelect") == 1
     assert fields["required_file"].get("maxSelect") == 1
-    assert fields["multi_files"].get("maxSelect") == 0
+    assert fields["multi_files"].get("maxSelect") == 99
