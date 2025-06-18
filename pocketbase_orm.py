@@ -535,31 +535,13 @@ class PBModel(BaseModel):
                 logger.debug(
                     f"Merged json_schema_extra for {name}: {field_info.json_schema_extra}"
                 )
+
             if field_def["type"] == "file":
-                # Check if there's a maxSize parameter in the field info
-                max_size = None
-                if (
-                    hasattr(field_info, "json_schema_extra")
-                    and field_info.json_schema_extra
-                ):
-                    max_size = field_info.json_schema_extra.get("maxSize")
-
                 # Determine minSelect and maxSelect based on the field type
-                if get_origin(field) is list and FileUpload in get_args(field):
-                    # Lists allow unlimited files
-                    field_def["minSelect"] = 0
-                    field_def["maxSelect"] = 0
+                if list in flattend or List in flattend:
+                    field_def["maxSelect"] = 99
                 else:
-                    # Optional fields have minSelect 0, required fields 1
-                    field_def["minSelect"] = 1 if field_info.is_required() else 0
                     field_def["maxSelect"] = 1
-
-                # Set options if maxSize is provided
-                if max_size is not None:
-                    field_def["maxSize"] = max_size
-                    logger.debug(
-                        f"Configured file field {name} with maxSize: {max_size}"
-                    )
 
             fields.append(field_def)
             logger.debug(f"Added field definition: {field_def}")
