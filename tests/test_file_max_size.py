@@ -39,4 +39,4 @@ async def test_file_upload_max_size(setup_file_max_size_model):
     )
 
     print(attachment_field)
-    assert attachment_field["maxSize"] == 441944194419
+    assert attachment_field["maxSize"] == 441944194419  # type: ignore[invalid-key]

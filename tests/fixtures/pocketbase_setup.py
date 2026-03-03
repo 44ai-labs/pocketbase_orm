@@ -16,21 +16,28 @@ async def pb_client():
     url = os.getenv("POCKETBASE_URL", "http://127.0.0.1:4419")
 
     process = None
+    use_new_session = os.name == "posix"
     # PocketBase standard health endpoint
     health_endpoint = "/api/health"
     base_url_for_health_check = url.rstrip("/")
     health_check_full_url = f"{base_url_for_health_check}{health_endpoint}"
 
     try:
-        popen_kwargs = {
-            "stdout": subprocess.PIPE,
-            "stderr": subprocess.PIPE,
-            "text": True,
-        }
-        if os.name == "posix":
-            popen_kwargs["start_new_session"] = True
-
-        process = subprocess.Popen(["just", "reset-pocketbase"], **popen_kwargs)
+        if use_new_session:
+            process = subprocess.Popen(
+                ["just", "reset-pocketbase"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
+        else:
+            process = subprocess.Popen(
+                ["just", "reset-pocketbase"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
 
         time.sleep(1.0)
         if process.poll() is not None:
@@ -76,10 +83,11 @@ async def pb_client():
                 if attempt < max_retries - 1:
                     time.sleep(retry_delay_seconds)
                 else:
-                    pytest.fail(  # type: ignore
+                    _fail_msg = (
                         f"PocketBase did not become healthy at {health_check_full_url} "
                         f"after {max_retries} attempts ({int(max_retries * retry_delay_seconds)} seconds).\n"
                     )
+                    pytest.fail(_fail_msg)  # type: ignore[invalid-argument-type]
 
         if not healthy:
             pytest.fail("PocketBase health check definitively failed.")  # type: ignore
@@ -92,8 +100,7 @@ async def pb_client():
         if process:
             if (
                 os.name == "posix"
-                and "start_new_session" in popen_kwargs
-                and popen_kwargs["start_new_session"]
+                and use_new_session
             ):
                 try:
                     os.killpg(os.getpgid(process.pid), signal.SIGTERM)
@@ -118,8 +125,7 @@ async def pb_client():
                 )
                 if (
                     os.name == "posix"
-                    and "start_new_session" in popen_kwargs
-                    and popen_kwargs["start_new_session"]
+                    and use_new_session
                 ):
                     try:
                         os.killpg(os.getpgid(process.pid), signal.SIGKILL)

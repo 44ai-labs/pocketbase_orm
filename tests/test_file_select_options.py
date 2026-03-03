@@ -20,7 +20,7 @@ async def setup_file_select_model(pb_client):
 
 @pytest.mark.asyncio
 async def test_file_select_min_max(setup_file_select_model):
-    collection = await FileSelectModel._pb_client.collections.get_one(  # type: ignore
+    collection = await FileSelectModel._pb_client.collections.get_one(
         "file_select_models"
     )
     fields = {f["name"]: f for f in collection["fields"]}

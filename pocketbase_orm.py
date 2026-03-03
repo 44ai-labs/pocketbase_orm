@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, TypeVar, Generic, get_origin, get_args, Type
+from typing import Any, Dict, Self, TypeVar, Generic, get_origin, get_args, Type, cast
 import typing
 from typing import Union, List
 import types
@@ -10,6 +10,7 @@ import httpx
 from pocketbase import PocketBase, FileUpload
 from pocketbase.services.record import RecordService
 from pocketbase.models.dtos import CollectionModel, Record
+from pocketbase.models.options import CommonOptions, FirstOptions, ListOptions
 from pydantic import AnyUrl, BaseModel, EmailStr, Field
 
 __version__ = "0.17.2"
@@ -169,13 +170,18 @@ class PBModel(BaseModel):
         return cls._pb_client.collection(cls.get_collection_name())
 
     @classmethod
-    async def delete_by_id(cls, id: str, *args, **kwargs):
+    async def delete_by_id(cls, id: str | None, *args, **kwargs):
         """Delete a record from the collection by ID."""
+        if not id:
+            raise ValueError("id must be a non-empty string")
         return await cls.get_collection().delete(id, *args, **kwargs)
 
-    async def delete(self, id=None, *args, **kwargs):
+    async def delete(self, id: str | None = None, *args, **kwargs):
         """Delete this record instance from the collection."""
-        return await self.get_collection().delete(id or self.id, *args, **kwargs)
+        record_id = id or self.id
+        if record_id is None:
+            raise ValueError("No ID provided and this record has no ID.")
+        return await self.get_collection().delete(record_id, *args, **kwargs)
 
     @classmethod
     async def delete_collection(cls):
@@ -224,7 +230,7 @@ class PBModel(BaseModel):
         Process record data before model validation.
         Handles special cases like file fields.
         """
-        processed_data = record_data.copy()
+        processed_data: Dict[str, Any] = cast(Dict[str, Any], dict(record_data))
 
         # Get field types from annotations
         for field_name, field_type in cls.__annotations__.items():
@@ -260,16 +266,18 @@ class PBModel(BaseModel):
         return processed_data
 
     @classmethod
-    async def get_one(cls, id: str, **kwargs) -> T:
+    async def get_one(cls, id: str | None, **kwargs) -> Self:
         """Get a single record from the collection and convert to model instance."""
-        record = await cls.get_collection().get_one(id, kwargs)
+        if not id:
+            raise ValueError("id must be a non-empty string")
+        record = await cls.get_collection().get_one(id, options=cast(CommonOptions, kwargs) if kwargs else None)
         processed_data = cls._process_record_data(record)
         return cls.model_validate(processed_data)
 
     @classmethod
-    async def get_list(cls, page: int = 1, per_page: int = 10, **kwargs) -> list[T]:
+    async def get_list(cls, page: int = 1, per_page: int = 10, **kwargs) -> list[Self]:
         """Get a list of records from the collection and convert to model instances."""
-        results = await cls.get_collection().get_list(page, per_page, kwargs)
+        results = await cls.get_collection().get_list(page, per_page, options=cast(ListOptions, kwargs) if kwargs else None)
         items = [
             cls.model_validate(cls._process_record_data(record))
             for record in results["items"]
@@ -277,7 +285,7 @@ class PBModel(BaseModel):
         return items
 
     @classmethod
-    async def get_full_list(cls, **kwargs) -> list[T]:
+    async def get_full_list(cls, **kwargs) -> list[Self]:
         """Get a full list of records and convert to model instances."""
         records = await cls.get_collection().get_full_list(**kwargs)
         return [
@@ -285,9 +293,9 @@ class PBModel(BaseModel):
         ]
 
     @classmethod
-    async def get_first_list_item(cls, **kwargs) -> T:
+    async def get_first_list_item(cls, **kwargs) -> Self:
         """Get the first matching record and convert to model instance."""
-        record = await cls.get_collection().get_first(kwargs)
+        record = await cls.get_collection().get_first(options=cast(FirstOptions, kwargs) if kwargs else None)
         processed_data = cls._process_record_data(record)
         return cls.model_validate(processed_data)
 
@@ -365,14 +373,15 @@ class PBModel(BaseModel):
                 continue
             logger.debug(f"Processing field {field['name']}")
             # https://github.com/44ai-labs/pocketbase/blob/01be3cc23726335b1cf28f5f4f30ffa30feb256c/pocketbase/models/utils/collection_field.py
+            field_raw = cast(Dict[str, Any], field)
             field_dict = {
                 "name": field["name"],
                 "type": field["type"],
                 "id": field["id"] if "id" in field else None,
                 "required": field["required"] if "required" in field else False,
                 "system": field["system"],
-                "onCreate": field["onCreate"] if "onCreate" in field else False,
-                "onUpdate": field["onUpdate"] if "onUpdate" in field else False,
+                "onCreate": field_raw.get("onCreate", False),
+                "onUpdate": field_raw.get("onUpdate", False),
             }
             if hasattr(field, "options") and field["options"]:
                 field_dict["options"] = field["options"]
@@ -457,7 +466,7 @@ class PBModel(BaseModel):
             ]:  # Skip base model fields
                 continue
 
-            field_def = {"name": name, "type": cls._get_field_type(field)}
+            field_def: Dict[str, Any] = {"name": name, "type": cls._get_field_type(field)}
             logger.debug(f"Processing field {name} with type {field_def['type']}")
 
             # Get field info from Pydantic model
@@ -529,9 +538,11 @@ class PBModel(BaseModel):
             # Merge additional options defined via json_schema_extra
             if (
                 hasattr(field_info, "json_schema_extra")
-                and field_info.json_schema_extra
+                and isinstance(field_info.json_schema_extra, dict)
             ):
-                field_def.update(field_info.json_schema_extra)
+                extra = cast(Dict[str, Any], field_info.json_schema_extra)
+                for k, v in extra.items():
+                    field_def[k] = v
                 logger.debug(
                     f"Merged json_schema_extra for {name}: {field_info.json_schema_extra}"
                 )
@@ -625,7 +636,7 @@ class PBModel(BaseModel):
         # Anything else we can’t classify:
         return "json"
 
-    async def save(self) -> T:
+    async def save(self) -> Self:
         """
         Save the model instance to PocketBase.
         """

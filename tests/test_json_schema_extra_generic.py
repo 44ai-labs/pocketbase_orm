@@ -37,7 +37,7 @@ async def setup_presentable_model(pb_client):
 
 @pytest.mark.asyncio
 async def test_json_schema_extra_applied(setup_extra_model):
-    collection = await ExtraModel._pb_client.collections.get_one("extra_models")  # type: ignore
+    collection = await ExtraModel._pb_client.collections.get_one("extra_models")
     fields = collection["fields"]
     name_field = next((f for f in fields if f["name"] == "name"), None)
     assert name_field is not None
@@ -47,7 +47,7 @@ async def test_json_schema_extra_applied(setup_extra_model):
 @pytest.mark.asyncio
 async def test_presentable_option_applied(setup_presentable_model):
     """Ensure the presentable flag can be set via json_schema_extra."""
-    collection = await PresentableModel._pb_client.collections.get_one(  # type: ignore
+    collection = await PresentableModel._pb_client.collections.get_one(
         "presentable_models"
     )
     fields = {f["name"]: f for f in collection["fields"]}

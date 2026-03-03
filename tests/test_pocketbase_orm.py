@@ -153,19 +153,19 @@ async def test_related_model_crud(setup_models):
     assert model.id != ""
 
     # Read
-    retrieved = await RelatedModel.get_one(model.id)  # type: ignore
+    retrieved = await RelatedModel.get_one(model.id)
     assert retrieved.name == "CRUD Test Model"
 
     # Update
     model.name = "Updated Name"
     await model.save()
-    updated = await RelatedModel.get_one(model.id)  # type: ignore
+    updated = await RelatedModel.get_one(model.id)
     assert updated.name == "Updated Name"
 
     # Delete
-    await RelatedModel.delete_by_id(model.id)  # type: ignore
+    await RelatedModel.delete_by_id(model.id)
     with pytest.raises(Exception):
-        await RelatedModel.get_one(model.id)  # type: ignore
+        await RelatedModel.get_one(model.id)
 
 
 def test_example_validation(setup_models, related_model):
@@ -176,7 +176,7 @@ def test_example_validation(setup_models, related_model):
             text_field="Test",
             number_field=123,
             is_active=True,
-            email_field="invalid-email",  # type: ignore
+            email_field="invalid-email",
             url_field="http://example.com",  # type: ignore
             created_at=datetime.now(timezone.utc),
             options=["option1"],
@@ -274,7 +274,7 @@ async def test_user_crud_operations(setup_models):
     test_users.append(user)
 
     # Test get_one
-    retrieved: User = await User.get_one(user.id)  # type: ignore
+    retrieved: User = await User.get_one(user.id)
     assert retrieved.email == email
     assert retrieved.name == "Test User"
     assert retrieved.password is None  # Password should not be returned
@@ -409,40 +409,40 @@ async def test_enum_field_handling(setup_models):
 async def test_optional_and_list_enums(setup_models):
     """Ensure optional and list enums are handled correctly."""
     opt = await OptionalEnumModel(name="Opt", user_type=UserType.REGULAR).save()
-    fetched_opt = await OptionalEnumModel.get_one(opt.id)  # type: ignore
+    fetched_opt = await OptionalEnumModel.get_one(opt.id)
     assert fetched_opt.user_type == UserType.REGULAR
     opt_collection = await opt._pb_client.collections.get_one("optional_enum_models")
     opt_field = next(f for f in opt_collection["fields"] if f["name"] == "user_type")
-    assert opt_field["maxSelect"] == 1
+    assert opt_field["maxSelect"] == 1  # type: ignore[invalid-key]
     assert opt_field["required"] is False
 
     list_model = await ListEnumModel(
         name="List", user_types=[UserType.ADMIN, UserType.GUEST]
     ).save()
-    fetched_list = await ListEnumModel.get_one(list_model.id)  # type: ignore
+    fetched_list = await ListEnumModel.get_one(list_model.id)
     assert fetched_list.user_types == [UserType.ADMIN, UserType.GUEST]
 
     collection = await list_model._pb_client.collections.get_one("list_enum_models")
     field = next(f for f in collection["fields"] if f["name"] == "user_types")
     assert field["type"] == "select"
-    assert field["maxSelect"] == len(UserType)
+    assert field["maxSelect"] == len(UserType)  # type: ignore[invalid-key]
 
 
 @pytest.mark.asyncio
 async def test_optional_list_enum_model(setup_models):
     """Ensure optional list of enums works."""
     model = await OptionalListEnumModel(name="OptListNone").save()
-    fetched = await OptionalListEnumModel.get_one(model.id)  # type: ignore
+    fetched = await OptionalListEnumModel.get_one(model.id)
     assert fetched.user_types == []
     collection = await model._pb_client.collections.get_one("optional_list_enum_models")
     field = next(f for f in collection["fields"] if f["name"] == "user_types")
     assert field["required"] is False
-    assert field["maxSelect"] == len(UserType)
+    assert field["maxSelect"] == len(UserType)  # type: ignore[invalid-key]
 
     model2 = await OptionalListEnumModel(
         name="OptListVal", user_types=[UserType.REGULAR]
     ).save()
-    fetched2 = await OptionalListEnumModel.get_one(model2.id)  # type: ignore
+    fetched2 = await OptionalListEnumModel.get_one(model2.id)
     assert fetched2.user_types == [UserType.REGULAR]
 
 
@@ -456,7 +456,7 @@ async def test_non_type_checks_model(setup_models):
     assert model.id and model.id != ""
 
     # Retrieve and check fields
-    retrieved: NonTypeChecksModel = await NonTypeChecksModel.get_one(model.id)  # type: ignore
+    retrieved: NonTypeChecksModel = await NonTypeChecksModel.get_one(model.id)
     assert retrieved.name is None
     assert retrieved.age == 0
     assert retrieved.is_active is False
@@ -480,7 +480,7 @@ async def test_json_type_checks_model(setup_models):
     assert model.id and model.id != ""
 
     # Retrieve and check fields
-    retrieved: JSONTypeandFile = await JSONTypeandFile.get_one(model.id)  # type: ignore
+    retrieved: JSONTypeandFile = await JSONTypeandFile.get_one(model.id)
     assert retrieved.test_dict == {"key1": "value1", "key2": "value2"}
     assert retrieved.test_list == ["item1", "item2"]
     assert retrieved.test_string_list == ["string1", "string2"]
