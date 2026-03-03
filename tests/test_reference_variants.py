@@ -47,9 +47,7 @@ async def test_reference_types(setup_reference_models, pb_client):
         name="Tester2",
     ).save()
 
-    collection = await SingleOptional._pb_client.collections.get_one(
-        "single_optional"
-    )
+    collection = await SingleOptional._pb_client.collections.get_one("single_optional")
     fields = {f["name"]: f for f in collection["fields"]}
     assert fields["user"].get("type") == "relation"
     assert fields["user"].get("maxSelect") == 1
@@ -60,9 +58,7 @@ async def test_reference_types(setup_reference_models, pb_client):
     retrieved_single = await SingleOptional.get_one(single.id)
     assert retrieved_single.user == user.id
 
-    collection = await SingleOptional._pb_client.collections.get_one(
-        "multi_ref"
-    )
+    collection = await SingleOptional._pb_client.collections.get_one("multi_ref")
     fields = {f["name"]: f for f in collection["fields"]}
     print(fields["users"])
     assert fields["users"].get("type") == "relation"

@@ -270,14 +270,18 @@ class PBModel(BaseModel):
         """Get a single record from the collection and convert to model instance."""
         if not id:
             raise ValueError("id must be a non-empty string")
-        record = await cls.get_collection().get_one(id, options=cast(CommonOptions, kwargs) if kwargs else None)
+        record = await cls.get_collection().get_one(
+            id, options=cast(CommonOptions, kwargs) if kwargs else None
+        )
         processed_data = cls._process_record_data(record)
         return cls.model_validate(processed_data)
 
     @classmethod
     async def get_list(cls, page: int = 1, per_page: int = 10, **kwargs) -> list[Self]:
         """Get a list of records from the collection and convert to model instances."""
-        results = await cls.get_collection().get_list(page, per_page, options=cast(ListOptions, kwargs) if kwargs else None)
+        results = await cls.get_collection().get_list(
+            page, per_page, options=cast(ListOptions, kwargs) if kwargs else None
+        )
         items = [
             cls.model_validate(cls._process_record_data(record))
             for record in results["items"]
@@ -295,7 +299,9 @@ class PBModel(BaseModel):
     @classmethod
     async def get_first_list_item(cls, **kwargs) -> Self:
         """Get the first matching record and convert to model instance."""
-        record = await cls.get_collection().get_first(options=cast(FirstOptions, kwargs) if kwargs else None)
+        record = await cls.get_collection().get_first(
+            options=cast(FirstOptions, kwargs) if kwargs else None
+        )
         processed_data = cls._process_record_data(record)
         return cls.model_validate(processed_data)
 
@@ -466,7 +472,10 @@ class PBModel(BaseModel):
             ]:  # Skip base model fields
                 continue
 
-            field_def: Dict[str, Any] = {"name": name, "type": cls._get_field_type(field)}
+            field_def: Dict[str, Any] = {
+                "name": name,
+                "type": cls._get_field_type(field),
+            }
             logger.debug(f"Processing field {name} with type {field_def['type']}")
 
             # Get field info from Pydantic model
@@ -536,9 +545,8 @@ class PBModel(BaseModel):
                     raise
 
             # Merge additional options defined via json_schema_extra
-            if (
-                hasattr(field_info, "json_schema_extra")
-                and isinstance(field_info.json_schema_extra, dict)
+            if hasattr(field_info, "json_schema_extra") and isinstance(
+                field_info.json_schema_extra, dict
             ):
                 extra = cast(Dict[str, Any], field_info.json_schema_extra)
                 for k, v in extra.items():

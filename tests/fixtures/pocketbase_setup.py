@@ -98,10 +98,7 @@ async def pb_client():
 
     finally:
         if process:
-            if (
-                os.name == "posix"
-                and use_new_session
-            ):
+            if os.name == "posix" and use_new_session:
                 try:
                     os.killpg(os.getpgid(process.pid), signal.SIGTERM)
                     print("Sent SIGTERM to process group.")
@@ -123,10 +120,7 @@ async def pb_client():
                 print(
                     "PocketBase process did not terminate gracefully after 10s. Sending kill signal..."
                 )
-                if (
-                    os.name == "posix"
-                    and use_new_session
-                ):
+                if os.name == "posix" and use_new_session:
                     try:
                         os.killpg(os.getpgid(process.pid), signal.SIGKILL)
                     except ProcessLookupError:
