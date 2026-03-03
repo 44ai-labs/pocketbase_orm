@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11"
 
 [[package]]
@@ -149,8 +149,8 @@ wheels = [
 
 [[package]]
 name = "pocketbase-async"
-version = "0.12.0"
-source = { git = "https://github.com/44ai-labs/pocketbase-async?rev=update-dto-definitions#ec7a4e45fad5395145c77d6f27fb470ccf5dd895" }
+version = "0.12.1"
+source = { git = "https://github.com/44ai-labs/pocketbase-async?rev=dev-44ai#ba26a4cca67b31b9aefdbc90bb972112325f38b1" }
 dependencies = [
     { name = "httpx" },
     { name = "httpx-sse" },
@@ -172,7 +172,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "pocketbase-async", git = "https://github.com/44ai-labs/pocketbase-async?rev=update-dto-definitions" },
+    { name = "pocketbase-async", git = "https://github.com/44ai-labs/pocketbase-async?rev=dev-44ai" },
     { name = "pydantic", extras = ["email"], specifier = ">=2.10.6" },
 ]
 
