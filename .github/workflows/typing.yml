@@ -1,20 +1,12 @@
-name: Tests
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+name: Typing
 
 on:
   push:
   pull_request:
 
 jobs:
-  test:
+  typing-checks:
     runs-on: ubuntu-latest
-    strategy:
-      max-parallel: 1
-      matrix:
-        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
@@ -32,11 +24,6 @@ jobs:
       - name: Install Just
         uses: extractions/setup-just@v3
 
-      - name: Install Pocketbase
+      - name: Run Typing Checks
         run: |
-          just install-pocketbase
-
-      - name: Run Tests
-        timeout-minutes: 5
-        run: |
-          uv run pytest -v tests/
+          just typing

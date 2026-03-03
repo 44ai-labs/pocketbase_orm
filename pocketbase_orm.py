@@ -1,18 +1,41 @@
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, TypeVar, Union
+from typing import Any, Dict, Self, TypeVar, Generic, get_origin, get_args, Type, cast
+import typing
+from typing import Union, List
+import types
 
 import httpx
-from pocketbase import PocketBase
-from pocketbase.client import FileUpload
+from pocketbase import PocketBase, FileUpload
+from pocketbase.services.record import RecordService
+from pocketbase.models.dtos import CollectionModel, Record
+from pocketbase.models.options import CommonOptions, FirstOptions, ListOptions
 from pydantic import AnyUrl, BaseModel, EmailStr, Field
 
-__version__ = "0.17.1"
+__version__ = "0.17.2"
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound="PBModel")
+
+
+class PBReferenceType(Generic[T]):
+    """
+    A generic type hint to signify a reference to another model type T.
+    This class itself doesn't need to be a Pydantic model if it's purely for type hinting.
+    """
+
+    pass
+
+
+PBReference = (
+    PBReferenceType[T] | str
+)  # has to be string to set it correctly when writing a relation id
+
+FileUploadORM = FileUpload | str  # on get we only get a string back
+
+PBPassword = str | None  # Only needed for create and update
 
 
 def _pluralize(singular: str) -> str:
@@ -23,6 +46,30 @@ def _pluralize(singular: str) -> str:
         return singular + "es"
     else:
         return singular + "s"
+
+
+def unroll_types(t):
+    origin = get_origin(t)
+    args = get_args(t)
+
+    # 1) typing.Union[...] or PEP604 X|Y
+    if origin is Union or origin is types.UnionType:
+        out = []
+        for sub in args:
+            if sub is type(None):
+                continue
+            out.extend(unroll_types(sub))
+        return out
+
+    # 2) list[...] or PBReferenceType[...]
+    if origin in (list, List, PBReferenceType):
+        out = [origin]
+        for sub in args:
+            out.extend(unroll_types(sub))
+        return out
+
+    # 3) leaf
+    return [t]
 
 
 class PBModel(BaseModel):
@@ -51,6 +98,18 @@ class PBModel(BaseModel):
         else:
             cls._collection_name = _pluralize(cls.__name__.lower())
 
+        for name, field in cls.model_fields.items():
+            ann = field.annotation
+            if cls.is_union_type(ann) and type(None) in get_args(ann):
+                # collect the non-None members of the Union
+                non_none = [t for t in get_args(ann) if t is not type(None)]
+                # if any of them is int or bool, reject
+                if any(t in (int, bool) for t in non_none):
+                    bad = " or ".join(t.__name__ for t in non_none if t in (int, bool))
+                    raise TypeError(
+                        f"Field '{name}' may not be Optional[{bad}] due to defaults of pocketbase (0 for int and False for bool)."
+                    )
+
     @classmethod
     def bind_client(cls, client: PocketBase):
         """
@@ -59,19 +118,19 @@ class PBModel(BaseModel):
         cls._pb_client = client
 
     @classmethod
-    def init_client(
+    async def init_client(
         cls,
         url: str,
-        admin_email: str | None = None,
-        admin_password: str | None = None,
+        admin_email: str,
+        admin_password: str,
     ) -> PocketBase:
         """
         Initialize a PocketBase client and bind it to the model class.
 
         Args:
             url: The PocketBase server URL
-            admin_email: Optional admin email for authentication
-            admin_password: Optional admin password for authentication
+            admin_email: admin email for authentication
+            admin_password: admin password for authentication
 
         Returns:
             The initialized PocketBase client
@@ -81,7 +140,13 @@ class PBModel(BaseModel):
         """
         client = PocketBase(url)
         if admin_email and admin_password:
-            client.admins.auth_with_password(admin_email, admin_password)
+            await client.collection("_superusers").auth.with_password(
+                admin_email, admin_password
+            )
+        else:
+            raise ValueError(
+                "Admin credentials are required to initialize the PocketBase client."
+            )
         cls.bind_client(client)
         return client
 
@@ -94,7 +159,7 @@ class PBModel(BaseModel):
         return cls._collection_name
 
     @classmethod
-    def get_collection(cls):
+    def get_collection(cls) -> RecordService:
         """
         Returns the collection instance for the model.
         """
@@ -105,16 +170,21 @@ class PBModel(BaseModel):
         return cls._pb_client.collection(cls.get_collection_name())
 
     @classmethod
-    def delete_by_id(cls, id: str, *args, **kwargs):
+    async def delete_by_id(cls, id: str | None, *args, **kwargs):
         """Delete a record from the collection by ID."""
-        return cls.get_collection().delete(id, *args, **kwargs)
+        if not id:
+            raise ValueError("id must be a non-empty string")
+        return await cls.get_collection().delete(id, *args, **kwargs)
 
-    def delete(self, id=None, *args, **kwargs):
+    async def delete(self, id: str | None = None, *args, **kwargs):
         """Delete this record instance from the collection."""
-        return self.get_collection().delete(id or self.id, *args, **kwargs)
+        record_id = id or self.id
+        if record_id is None:
+            raise ValueError("No ID provided and this record has no ID.")
+        return await self.get_collection().delete(record_id, *args, **kwargs)
 
     @classmethod
-    def delete_collection(cls):
+    async def delete_collection(cls):
         """
         Delete the entire collection from PocketBase.
 
@@ -130,9 +200,9 @@ class PBModel(BaseModel):
         collection_name = cls.get_collection_name()
         try:
             # Get collection ID first
-            collection = cls._pb_client.collections.get_one(collection_name)
+            collection = await cls._pb_client.collections.get_one(collection_name)
             # Delete the collection
-            cls._pb_client.collections.delete(collection.id)
+            await cls._pb_client.collections.delete(collection["id"])
             logger.debug(f"Collection {collection_name} deleted successfully.")
         except Exception as e:
             if "404" in str(e):
@@ -141,13 +211,26 @@ class PBModel(BaseModel):
                 logger.error(f"Error deleting collection {collection_name}: {e}")
                 raise
 
+    def is_union_type(field_type: Any) -> bool:
+        origin = typing.get_origin(field_type)
+        return origin is typing.Union or origin is types.UnionType
+
     @classmethod
-    def _process_record_data(cls, record_data: Dict[str, Any]) -> Dict[str, Any]:
+    def is_file_upload_union(cls, field_type):
+        args = get_args(field_type)
+        if cls.is_union_type(field_type) and FileUpload in args:
+            return True
+        if get_origin(field_type) is list and FileUpload in args:
+            return True
+        return field_type is FileUpload
+
+    @classmethod
+    def _process_record_data(cls, record_data: Record) -> Dict[str, Any]:
         """
         Process record data before model validation.
         Handles special cases like file fields.
         """
-        processed_data = record_data.copy()
+        processed_data: Dict[str, Any] = cast(Dict[str, Any], dict(record_data))
 
         # Get field types from annotations
         for field_name, field_type in cls.__annotations__.items():
@@ -155,78 +238,102 @@ class PBModel(BaseModel):
                 continue
 
             # Check if field is a file type (in a Union)
-            is_file_field = False
-            if hasattr(field_type, "__origin__") and field_type.__origin__ is Union:
-                is_file_field = FileUpload in field_type.__args__
-            else:
-                is_file_field = field_type is FileUpload
+            is_file_field = cls.is_file_upload_union(field_type)
 
             # Handle file fields - convert empty strings to None
             if is_file_field and processed_data[field_name] == "":
                 processed_data[field_name] = None
 
+            if field_type is not str and processed_data[field_name] == "":
+                # Convert empty strings to None for non-string fields
+                processed_data[field_name] = None
+
+            flattend = unroll_types(field_type)
+
+            field_type_str = cls._get_field_type(field_type)
+            if (
+                field_type_str == "relation"
+                or field_type_str == "select"
+                or field_type_str == "file"
+            ):
+                is_list_field = False
+                if list in flattend or List in flattend:
+                    is_list_field = True
+                if is_list_field and not isinstance(processed_data[field_name], list):
+                    # If it's a list field, ensure it's a list
+                    processed_data[field_name] = [processed_data[field_name]]
+
         return processed_data
 
     @classmethod
-    def get_one(cls, id: str, **kwargs) -> T:
+    async def get_one(cls, id: str | None, **kwargs) -> Self:
         """Get a single record from the collection and convert to model instance."""
-        record = cls.get_collection().get_one(id, kwargs)
-        processed_data = cls._process_record_data(record.__dict__)
+        if not id:
+            raise ValueError("id must be a non-empty string")
+        record = await cls.get_collection().get_one(
+            id, options=cast(CommonOptions, kwargs) if kwargs else None
+        )
+        processed_data = cls._process_record_data(record)
         return cls.model_validate(processed_data)
 
     @classmethod
-    def get_list(cls, page: int = 1, per_page: int = 10, **kwargs) -> list[T]:
+    async def get_list(cls, page: int = 1, per_page: int = 10, **kwargs) -> list[Self]:
         """Get a list of records from the collection and convert to model instances."""
-        result = cls.get_collection().get_list(page, per_page, kwargs)
+        results = await cls.get_collection().get_list(
+            page, per_page, options=cast(ListOptions, kwargs) if kwargs else None
+        )
         items = [
-            cls.model_validate(cls._process_record_data(record.__dict__))
-            for record in result.items
+            cls.model_validate(cls._process_record_data(record))
+            for record in results["items"]
         ]
         return items
 
     @classmethod
-    def get_full_list(cls, **kwargs) -> list[T]:
+    async def get_full_list(cls, **kwargs) -> list[Self]:
         """Get a full list of records and convert to model instances."""
-        records = cls.get_collection().get_full_list(**kwargs)
+        records = await cls.get_collection().get_full_list(**kwargs)
         return [
-            cls.model_validate(cls._process_record_data(record.__dict__))
-            for record in records
+            cls.model_validate(cls._process_record_data(record)) for record in records
         ]
 
     @classmethod
-    def get_first_list_item(cls, query, **kwargs) -> T:
+    async def get_first_list_item(cls, **kwargs) -> Self:
         """Get the first matching record and convert to model instance."""
-        record = cls.get_collection().get_first_list_item(query, kwargs)
-        processed_data = cls._process_record_data(record.__dict__)
+        record = await cls.get_collection().get_first(
+            options=cast(FirstOptions, kwargs) if kwargs else None
+        )
+        processed_data = cls._process_record_data(record)
         return cls.model_validate(processed_data)
 
     @classmethod
-    def sync_collection(cls):
+    async def sync_collection(cls):
         """
         Sync the collection schema with PocketBase. Will create or update the collection.
         """
         collection_name = cls.get_collection_name()
 
         try:
-            existing_collection = cls._pb_client.collections.get_one(collection_name)
+            existing_collection = await cls._pb_client.collections.get_one(
+                collection_name
+            )
             logger.debug(f"Collection {collection_name} exists. Updating schema...")
-            cls._update_collection(existing_collection)
+            await cls._update_collection(existing_collection)
         except Exception as e:
             if "404" in str(e):  # Only create if collection doesn't exist
                 logger.debug(
                     f"Collection {collection_name} does not exist. Creating collection..."
                 )
-                cls._create_collection()
+                await cls._create_collection()
             else:
                 logger.error(f"Error syncing collection: {e}")
                 raise
 
     @classmethod
-    def _create_collection(cls):
+    async def _create_collection(cls):
         """
         Create the collection schema in PocketBase.
         """
-        fields = cls._generate_fields()
+        fields = await cls._generate_fields()
         collection_name = cls.get_collection_name()
 
         collection_payload = {
@@ -238,7 +345,7 @@ class PBModel(BaseModel):
         logger.debug(f"Creating collection with payload: {collection_payload}")
 
         try:
-            response = cls._pb_client.collections.create(collection_payload)
+            response = await cls._pb_client.collections.create(collection_payload)
             logger.debug(f"Collection {collection_name} created successfully.")
             return response
         except Exception as e:
@@ -246,34 +353,49 @@ class PBModel(BaseModel):
             # Try to get more details about the error
             if hasattr(e, "response") and hasattr(e.response, "json"):
                 try:
-                    error_details = e.response.json()
+                    error_details = e.response.json()  # type: ignore
                     logger.error(f"Error details: {error_details}")
-                except:
+                except Exception as _:
                     pass
             raise
 
     @classmethod
-    def _update_collection(cls, existing_collection):
+    async def _update_collection(cls, existing_collection: CollectionModel):
         """
         Update the collection schema in PocketBase.
         """
         # Get the schema from the existing collection
-        current_fields = {field.name: field for field in existing_collection.fields}
-        new_fields = cls._generate_fields()
+        current_fields = {
+            field["name"]: field for field in existing_collection["fields"]
+        }
+        new_fields = await cls._generate_fields()
+        all_fields = {field["name"]: field for field in new_fields}
 
         # Preserve existing fields and add new ones
         final_fields = []
-        for field in existing_collection.fields:
+        for field in existing_collection["fields"]:
+            if field["name"] not in all_fields:
+                # the field will be removed
+                continue
+            logger.debug(f"Processing field {field['name']}")
+            # https://github.com/44ai-labs/pocketbase/blob/01be3cc23726335b1cf28f5f4f30ffa30feb256c/pocketbase/models/utils/collection_field.py
+            field_raw = cast(Dict[str, Any], field)
             field_dict = {
-                "name": field.name,
-                "type": field.type,
-                "required": field.required,
-                "system": field.system,
-                "onCreate": field.onCreate,
-                "onUpdate": field.onUpdate,
+                "name": field["name"],
+                "type": field["type"],
+                "id": field["id"] if "id" in field else None,
+                "required": field["required"] if "required" in field else False,
+                "system": field["system"],
+                "onCreate": field_raw.get("onCreate", False),
+                "onUpdate": field_raw.get("onUpdate", False),
             }
-            if hasattr(field, "options") and field.options:
-                field_dict["options"] = field.options
+            if hasattr(field, "options") and field["options"]:
+                field_dict["options"] = field["options"]
+            # make sure we sync references correct
+            field_name = field["name"]
+            for new_field in new_fields:
+                if new_field["name"] == field_name:
+                    field_dict.update(new_field)
             final_fields.append(field_dict)
 
         # Add new fields that don't exist yet
@@ -282,20 +404,33 @@ class PBModel(BaseModel):
                 final_fields.append(new_field)
 
         try:
-            cls._pb_client.collections.update(
-                existing_collection.id,
+            logger.debug(
+                f"UPDATING {existing_collection['id']}, {existing_collection['name']}, {final_fields}"
+            )
+            await cls._pb_client.collections.update(
+                existing_collection["id"],
                 {
-                    "name": existing_collection.name,
+                    "name": existing_collection["name"],
                     "fields": final_fields,
                 },
             )
-            logger.debug(f"Collection {existing_collection.name} updated successfully.")
+            logger.debug(
+                f"Collection {existing_collection['name']} updated successfully."
+            )
         except Exception as e:
             logger.error(f"Error updating collection: {e}")
             raise
 
+    @staticmethod
+    def get_referenced_pbmodel_type(ref_type_hint: Any) -> Type["PBModel"] | None:
+        if get_origin(ref_type_hint) is PBReferenceType:
+            args = get_args(ref_type_hint)
+            if args and isinstance(args[0], type) and issubclass(args[0], PBModel):
+                return args[0]
+        return None
+
     @classmethod
-    def _generate_fields(cls) -> list[Dict[str, Any]]:
+    async def _generate_fields(cls) -> list[Dict[str, Any]]:
         """
         Generate the field definitions for the collection based on the Pydantic model.
         """
@@ -329,11 +464,18 @@ class PBModel(BaseModel):
         )
 
         for name, field in cls.__annotations__.items():
-
-            if name in ["id", "created", "updated"]:  # Skip base model fields
+            if name in [
+                "id",
+                "created",
+                "updated",
+                "passwordConfirm",
+            ]:  # Skip base model fields
                 continue
 
-            field_def = {"name": name, "type": cls._get_field_type(field)}
+            field_def: Dict[str, Any] = {
+                "name": name,
+                "type": cls._get_field_type(field),
+            }
             logger.debug(f"Processing field {name} with type {field_def['type']}")
 
             # Get field info from Pydantic model
@@ -341,73 +483,84 @@ class PBModel(BaseModel):
             field_def["required"] = field_info.is_required()
 
             # Configure enum select field options if applicable
-            let_enum = None
-            if hasattr(field, "__origin__") and field.__origin__ is Union:
-                for arg in field.__args__:
-                    if isinstance(arg, type) and issubclass(arg, Enum):
-                        let_enum = arg
-                        break
-            elif isinstance(field, type) and issubclass(field, Enum):
-                let_enum = field
+            max_select = 1
+            flattend = unroll_types(field)
+            # for file, relation, and enum lists
+            if list in flattend or List in flattend:
+                # If it's a list of enums, treat it as a multi-select
+                max_select = 999
 
-            if let_enum is not None and field_def["type"] == "select":
+            if field_def["type"] == "select":
+                enum = None
+                for arg in flattend:
+                    if isinstance(arg, type) and issubclass(arg, Enum):
+                        enum = arg
+                        break
+                if enum is None:
+                    raise TypeError(
+                        f"Field '{name}' is defined as a select but no Enum type found."
+                    )
+                if max_select == 999:
+                    max_select = len(enum)
                 field_def.update(
-                    {
-                        "maxSelect": 1,
-                        "values": [e.value for e in let_enum],
-                    }
+                    {"maxSelect": max_select, "values": [e.value for e in enum]}
                 )
-                logger.debug(f"Configured enum select field {name} with: {field_def}")
 
             # Add additional configuration for relation fields
             if field_def["type"] == "relation":
-                logger.debug(f"Configuring relation field {name}")
-                # Find the related model in Union types
                 related_model = None
-                if hasattr(field, "__origin__") and field.__origin__ is Union:
-                    logger.debug(f"Field {name} args: {field.__args__}")
-                    for arg in field.__args__:
-                        if hasattr(arg, "__origin__"):
-                            continue
-                        if arg == str:
-                            continue
+                for arg in flattend:
+                    if isinstance(arg, type) and issubclass(arg, PBModel):
                         related_model = arg
-                        logger.debug(f"Found related model for {name}: {related_model}")
-                if related_model:
-                    try:
-                        logger.debug(
-                            f"Looking up collection for {related_model.get_collection_name()}"
-                        )
-                        collection = cls._pb_client.collections.get_one(
-                            related_model.get_collection_name()
-                        )
-                        logger.debug(f"Found collection for {name}: {collection.id}")
+                        break
+                    if related_model is not None:
+                        break
+                if related_model is None:
+                    raise TypeError(
+                        f"Field '{name}' is defined as a relation but no PBModel type found."
+                    )
+                # fetch target collection id
+                try:
+                    coll = await cls._pb_client.collections.get_one(
+                        related_model.get_collection_name()
+                    )
 
-                        field_def.update(
-                            {
-                                "name": name,
-                                "type": "relation",
-                                "system": False,
-                                "required": field_info.is_required(),
-                                "presentable": False,
-                                "cascadeDelete": False,
-                                "minSelect": 0,
-                                "maxSelect": 1,
-                                "collectionId": collection.id,  # This must be present and non-empty
-                            }
-                        )
+                    field_def.update(
+                        {
+                            "system": False,
+                            "required": field_info.is_required(),
+                            "presentable": False,
+                            "cascadeDelete": False,
+                            "minSelect": 0,
+                            "maxSelect": max_select,
+                            "collectionId": coll["id"],
+                        }
+                    )
+                    logger.debug(f"Field definition for {name}: {field_def}")
+                except Exception as e:
+                    logger.error(
+                        f"Error getting collection ID for {related_model.get_collection_name()}: {e}",
+                        exc_info=True,
+                    )
+                    raise
 
-                        logger.debug(f"Field definition for {name}: {field_def}")
-                    except Exception as e:
-                        logger.error(
-                            f"Error getting collection ID for {related_model.Meta.collection_name}: {e}",
-                            exc_info=True,
-                        )
-                        raise
+            # Merge additional options defined via json_schema_extra
+            if hasattr(field_info, "json_schema_extra") and isinstance(
+                field_info.json_schema_extra, dict
+            ):
+                extra = cast(Dict[str, Any], field_info.json_schema_extra)
+                for k, v in extra.items():
+                    field_def[k] = v
+                logger.debug(
+                    f"Merged json_schema_extra for {name}: {field_info.json_schema_extra}"
+                )
+
+            if field_def["type"] == "file":
+                # Determine minSelect and maxSelect based on the field type
+                if list in flattend or List in flattend:
+                    field_def["maxSelect"] = 99
                 else:
-                    logger.error(f"No valid related model found for field {name}")
-                    raise ValueError(f"Invalid relation configuration for field {name}")
-            
+                    field_def["maxSelect"] = 1
 
             fields.append(field_def)
             logger.debug(f"Added field definition: {field_def}")
@@ -421,62 +574,81 @@ class PBModel(BaseModel):
         return isinstance(field_type, type) and issubclass(field_type, Enum)
 
     @staticmethod
-    def _is_pbmodel_type(field_type: Any) -> bool:
+    def _is_reference_type(field_type: type) -> bool:
         """Check if a type is a PBModel subclass."""
-        return isinstance(field_type, type) and issubclass(field_type, PBModel)
+        origin = get_origin(field_type)
+        if origin is PBReferenceType:
+            return True
+        if field_type is PBReferenceType:
+            return True
+        return False
 
     @staticmethod
-    def _get_field_type(pydantic_field: Any) -> str:
+    def _is_reference_list(field_type: type) -> bool:
+        """Check if a type is a list of PBReferenceType."""
+        origin = get_origin(field_type)
+        if origin is list:
+            inner_args = get_args(field_type)
+            if inner_args and PBModel._is_reference_type(inner_args[0]):
+                return True
+        return False
+
+    @classmethod
+    def _get_field_type(cls, pydantic_field: Any) -> str:
         """
-        Convert the Pydantic field type into a PocketBase field type.
+        Convert a (possibly parametrised) Pydantic type into the
+        corresponding PocketBase field type.
+
+        Handles:
+        • plain types            → str, int, PBReferenceType, …
+        • typing.Union[...]      → Union[str, PBReferenceType, …]
+        • PEP 604 unions (A | B) → UnionType
+        • Annotated[T, …]        (Pydantic v2)
+        • nested List[ … ]
         """
-        # Get all possible types to check
-        types_to_check = []
-        if hasattr(pydantic_field, "__origin__"):
-            if pydantic_field.__origin__ is Union:
-                types_to_check.extend(pydantic_field.__args__)
-            elif pydantic_field.__origin__ is list:
-                return "json"
-        elif hasattr(pydantic_field, "__or__") and hasattr(pydantic_field, "__args__"):
-            types_to_check.extend(pydantic_field.__args__)
-        else:
-            types_to_check.append(pydantic_field)
 
-        # Check all types in priority order
-        for field_type in types_to_check:
-            # Special types
-            if PBModel._is_enum_type(field_type):
-                return "select"
-            if PBModel._is_pbmodel_type(field_type):
-                return "relation"
-            if field_type == FileUpload:
-                return "file"
+        layers = unroll_types(pydantic_field)
 
-            # Basic types
-            if field_type == str:
-                return "text"
-            if field_type in (int, float):
-                return "number"
-            if field_type == bool:
-                return "bool"
-            if field_type == EmailStr:
-                return "email"
-            if field_type == AnyUrl:
-                return "url"
-            if field_type == datetime:
-                return "date"
-            if isinstance(field_type, (list, dict)):
-                return "json"
-
-        # Default to json for complex types
+        # ------------------------------------------------------------------ #
+        # 2. Decide in priority order
+        # ------------------------------------------------------------------ #
+        # PocketBase-specific helpers first
+        if PBReferenceType in layers:
+            return "relation"
+        if FileUpload in layers:
+            return "file"
+        if any(isinstance(t, type) and issubclass(t, Enum) for t in layers):
+            return "select"
+        if PBPassword in layers:
+            return "password"
+        if datetime in layers:
+            return "date"
+        if AnyUrl in layers:
+            return "url"
+        if EmailStr in layers:
+            return "email"
+        if int in layers or float in layers:
+            # If we have a numeric type, treat it as a number
+            return "number"
+        if list in layers or List in layers:
+            return "json"
+        if dict in layers:
+            # If we have a dict type, treat it as JSON
+            return "json"
+        if bool in layers:
+            # If we have a boolean type, treat it as a bool
+            return "bool"
+        if str in layers:
+            # If we have a string type, treat it as text
+            return "text"
+        # Anything else we can’t classify:
         return "json"
 
-    def save(self) -> T:
+    async def save(self) -> Self:
         """
         Save the model instance to PocketBase.
         """
-        client = self.get_collection().client
-        collection_name = self.get_collection_name()
+        collection = self.get_collection()
 
         # Prepare data for saving - handle file uploads specially
         data = {}
@@ -502,20 +674,20 @@ class PBModel(BaseModel):
                     data[field_name] = field_value
 
         if hasattr(self, "id") and self.id:
-            result = client.collection(collection_name).update(self.id, data)
+            result = await collection.update(self.id, data)
             logger.debug(f"Updated record with ID: {self.id}")
         else:
-            result = client.collection(collection_name).create(data)
-            self.id = result.id
+            result = await collection.create(data)
+            self.id = result["id"]
             logger.debug(f"Created new record with ID: {self.id}")
 
         # Update instance with response data from PocketBase
-        self.created = result.created
-        self.updated = result.updated
+        self.created = result.get("created", self.created)
+        self.updated = result.get("updated", self.updated)
 
         return self
 
-    def get_file_contents(self, field: str) -> bytes:
+    async def get_file_contents(self, field: str) -> bytes:
         """
         Get the contents of a file field using httpx.
 
@@ -544,14 +716,15 @@ class PBModel(BaseModel):
             return file_obj.read()
 
         # Otherwise, treat it as a filename and fetch from PocketBase
-        collection = self.get_collection()
-        client = collection.client
+        client = self._pb_client
+        if not client:
+            raise RuntimeError(
+                "PocketBase client not bound. Call PBModel.bind_client() first."
+            )
         collection_name = self.get_collection_name()
 
         # Construct the PocketBase file URL
-        file_url = (
-            f"{client.base_url}/api/files/{collection_name}/{self.id}/{field_value}"
-        )
+        file_url = f"{client._inners.client.base_url}/api/files/{collection_name}/{self.id}/{field_value}"
 
         try:
             response = httpx.get(file_url)
@@ -565,23 +738,20 @@ class User(PBModel, collection="users"):
     """Model class for PocketBase's built-in users collection."""
 
     email: EmailStr
-    password: str | None = None  # Only used when creating/updating
-    passwordConfirm: str | None = None  # Required when creating/updating password
+    password: str | None = Field(
+        default=None, min_length=8, max_length=64
+    )  # Only used when creating/updating
+    passwordConfirm: str | None = Field(
+        default=None, min_length=8, max_length=64
+    )  # Only used when creating/updating
     emailVisibility: bool = False
     verified: bool = False
-    name: str | None = None
-    avatar: Union[FileUpload, str, None] = None
+    name: str | None = Field(default=None, min_length=0)
+    avatar: FileUpload | None = None
 
     @classmethod
     def _create_collection(cls):
         """Override to prevent creation of system collection."""
         raise RuntimeError(
-            "Cannot create or modify the users collection as it is a system collection."
-        )
-
-    @classmethod
-    def _update_collection(cls, existing_collection):
-        """Override to prevent modification of system collection."""
-        raise RuntimeError(
-            "Cannot create or modify the users collection as it is a system collection."
+            "Cannot create the users collection as it is a system collection."
         )

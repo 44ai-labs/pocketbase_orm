@@ -1,4 +1,4 @@
-# PocketBase ORM
+# PocketBase ORM - Async
 
 A Python ORM (Object-Relational Mapper) for PocketBase that provides Pydantic model integration and automatic schema synchronization.
 
@@ -7,6 +7,7 @@ A Python ORM (Object-Relational Mapper) for PocketBase that provides Pydantic mo
 - 🚀 Pydantic model integration for data validation and serialization
 - 🔄 Automatic schema synchronization with PocketBase collections
 - 📦 Support for most PocketBase field types including relations and file uploads
+- 🔗 Reference fields support single, optional, and list relations using `PBReference`
 - 🛠️ Simple and intuitive API for CRUD operations
 
 ## Installation
@@ -18,10 +19,10 @@ uv install pocketbase-orm
 ## Quick Start
 
 ```python
-from pocketbase_orm import PBModel
+from pocketbase_orm import PBModel, PBReference, FileUploadORM
 from pydantic import EmailStr, AnyUrl, Field
 from datetime import datetime, timezone
-from pocketbase.client import FileUpload
+from pocketbase import FileUpload
 
 # Define your models
 class RelatedModel(PBModel, collection="related_models"):  # Optionally specify collection name
@@ -35,23 +36,24 @@ class Example(PBModel):  # Collection name will be "examples" by default
     created_at: datetime
     options: list[str]
     email_field: EmailStr | None = None
-    related_model: RelatedModel | str = Field(..., description="Related model reference")
-    image: FileUpload | str = Field(..., description="Image file upload")
+    related_model: PBReference[RelatedModel]
+    # Limit file size to 5MB (5242880 bytes)
+    image: FileUploadORM = Field(default=None, json_schema_extra={"maxSize": 5242880})
 
 # Initialize PocketBase client and bind it to the ORM
-client = PBModel.init_client(
+client = await PBModel.init_client(
     "YOUR_POCKETBASE_URL",
     "admin@example.com",
     "password"
 )
 
 # Sync collection schemas
-RelatedModel.sync_collection()
-Example.sync_collection()
+await RelatedModel.sync_collection()
+await Example.sync_collection()
 
 # Create and save records
 related_model = RelatedModel(name="Related Model")
-related_model.save()
+await related_model.save()
 
 # Create a new record with file upload
 with open("image.png", "rb") as f:
@@ -66,16 +68,16 @@ with open("image.png", "rb") as f:
         related_model=related_model.id,
         image=FileUpload(("image.png", f))
     )
-    example.save()
+    await example.save()
 
 # Query records
-full_list = Example.get_full_list()
-one = Example.get_one("RECORD_ID")
-first = Example.get_first_list_item(filter='email_field = "test@example.com"')
-filtered_list = Example.get_list(filter='email_field = "test@example.com"')
+full_list = await Example.get_full_list()
+one = await Example.get_one("RECORD_ID")
+first = await Example.get_first_list_item(filter='email_field = "test@example.com"')
+filtered_list = await Example.get_list(filter='email_field = "test@example.com"')
 
 # Get file contents
-image_bytes = example.get_file_contents("image")
+image_bytes = await example.get_file_contents("image")
 ```
 
 ## Model Definition
@@ -108,7 +110,9 @@ The collection name will be automatically derived from the class name (pluralize
 - URL: `AnyUrl`
 - DateTime: `datetime`
 - JSON: `List`, `Dict`
-- File: `FileUpload | str`
+- File: `FileUploadORM`
+  - You can set a maximum file size limit using `Field(json_schema_extra={"maxSize": 5242880})` (size in bytes)
+- Additional PocketBase field options can be provided for any field using `Field(..., json_schema_extra={...})`. These options are merged into the collection schema during `sync_collection`.
 - Relation: `Union[RelatedModel, str]`
 - Select: `Enum`
 
@@ -137,7 +141,6 @@ The collection name will be automatically derived from the class name (pluralize
 - Complex queries should use the PocketBase client directly
 - Relationship handling is limited to single relations
 - Indexes must be created manually
-- Schema syncing currently relies on a fork until https://github.com/vaphes/pocketbase/pull/120 is merged
 
 ## Contributing
 

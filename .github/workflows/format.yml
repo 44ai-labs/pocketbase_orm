@@ -1,8 +1,4 @@
-name: Tests
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+name: Format & Linting
 
 on:
   push:
@@ -11,10 +7,6 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      max-parallel: 1
-      matrix:
-        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
@@ -32,11 +24,6 @@ jobs:
       - name: Install Just
         uses: extractions/setup-just@v3
 
-      - name: Install Pocketbase
+      - name: Run Format & Linting
         run: |
-          just install-pocketbase
-
-      - name: Run Tests
-        timeout-minutes: 5
-        run: |
-          uv run pytest -v tests/
+          just ruff-ci
